@@ -1,0 +1,296 @@
+// Downstage Find: a native window that finds Downstage devices and opens their apps in the browser.
+// A web page can't ask the network who is there, so this does it: Bonjour first, since one question finds
+// everything without sweeping (a sweep tripped UniFi's threat protection at a venue), then a typed address or a
+// scan the person asks for, for networks that hide devices from each other.
+import Cocoa
+import WebKit
+
+struct Device {
+    var key: String
+    var kind: String
+    var name: String
+    var host: String
+    var port: Int
+    var serial = ""
+    var version = ""
+    var companion = false
+    var ontime = false
+    var hasApps = false
+    var gone = false
+    var json: [String: Any] {
+        ["key": key, "kind": kind, "name": name, "host": host, "port": port, "serial": serial, "version": version,
+         "companion": companion, "ontime": ontime, "hasApps": hasApps, "gone": gone]
+    }
+}
+
+func getJSON(_ url: String, timeout: TimeInterval, done: @escaping ([String: Any]?) -> Void) {
+    guard let u = URL(string: url) else { return done(nil) }
+    var r = URLRequest(url: u); r.timeoutInterval = timeout
+    URLSession.shared.dataTask(with: r) { data, resp, _ in
+        guard let data = data, (resp as? HTTPURLResponse)?.statusCode == 200,
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return DispatchQueue.main.async { done(nil) } }
+        DispatchQueue.main.async { done(o) }
+    }.resume()
+}
+
+func exists(_ url: String, done: @escaping (Bool) -> Void) {
+    guard let u = URL(string: url) else { return done(false) }
+    var r = URLRequest(url: u); r.httpMethod = "HEAD"; r.timeoutInterval = 3
+    URLSession.shared.dataTask(with: r) { _, resp, _ in
+        DispatchQueue.main.async { done((resp as? HTTPURLResponse)?.statusCode == 200) }
+    }.resume()
+}
+
+// What a device's /status says it is: a One or View has os_version, a light or Relay has firmware. Anything else isn't ours
+func identify(_ s: [String: Any], host: String, port: Int) -> Device? {
+    if s["os_version"] != nil {
+        let serial = s["serial"] as? String ?? ""
+        let view = !serial.hasPrefix("DS1-") && s["companion_installed"] == nil
+        var d = Device(key: serial.isEmpty ? host : serial, kind: view ? "view" : "one", name: s["name"] as? String ?? (serial.isEmpty ? host : serial), host: host, port: port)
+        update(&d, s)
+        return d
+    }
+    if let fw = s["firmware"] as? String, s["id"] != nil || s["serial"] != nil {
+        let id = s["id"] as? String ?? s["serial"] as? String ?? host
+        let model = (s["model"] as? String ?? "").lowercased()
+        let kind = model.contains("relay") ? "relay" : model.contains("lite") ? "lite" : model.contains("mini") ? "mini" : model.contains("360") ? "360" : "cue"
+        return Device(key: id, kind: kind, name: s["label"] as? String ?? id, host: host, port: port, serial: s["serial"] as? String ?? "", version: fw)
+    }
+    return nil
+}
+
+func update(_ d: inout Device, _ s: [String: Any]) {
+    if let n = s["name"] as? String, !n.isEmpty { d.name = n }
+    if let v = s["os_version"] as? String { d.version = v }
+    d.companion = s["companion_running"] as? Bool ?? false
+    d.ontime = s["ontime_running"] as? Bool ?? false
+}
+
+final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
+    var browser = NetServiceBrowser()
+    var services: [NetService] = []
+    var devices: [String: Device] = [:]
+    var changed: () -> Void = {}
+    var say: (String, Bool) -> Void = { _, _ in }
+    var scanState: (Bool) -> Void = { _ in }
+    var timer: Timer?
+
+    func start() {
+        browser.delegate = self
+        browser.searchForServices(ofType: "_downstage._tcp.", inDomain: "local.")
+        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.check() }
+    }
+    func refresh() {
+        browser.stop()
+        services = []
+        browser = NetServiceBrowser()
+        devices = devices.filter { !$0.value.gone }
+        changed()
+        browser.delegate = self
+        browser.searchForServices(ofType: "_downstage._tcp.", inDomain: "local.")
+        check()
+    }
+    func netServiceBrowser(_ b: NetServiceBrowser, didNotSearch err: [String: NSNumber]) {
+        say("macOS blocked the search. In System Settings, open Privacy & Security, then Local Network, and turn on Downstage Find.", true)
+    }
+    func netServiceBrowser(_ b: NetServiceBrowser, didFind s: NetService, moreComing: Bool) {
+        services.append(s)
+        s.delegate = self
+        s.resolve(withTimeout: 5)
+    }
+    func netServiceBrowser(_ b: NetServiceBrowser, didRemove s: NetService, moreComing: Bool) {
+        services.removeAll { $0 == s }
+        for (k, d) in devices where d.key == s.name || d.name == s.name { devices[k]?.gone = true }
+        check()
+    }
+    func netServiceDidResolveAddress(_ s: NetService) {
+        guard let host = ipv4(s) else { return }
+        let txt = s.txtRecordData().map { NetService.dictionary(fromTXTRecord: $0).mapValues { String(decoding: $0, as: UTF8.self) } } ?? [:]
+        let serial = txt["serial"] ?? ""
+        let kind = txt["kind"]?.lowercased() ?? (serial.hasPrefix("DS1-") ? "one" : serial.isEmpty ? "cue" : "view")
+        let key = txt["id"] ?? (serial.isEmpty ? s.name : serial)
+        var d = devices[key] ?? Device(key: key, kind: kind, name: txt["name"] ?? s.name, host: host, port: s.port, serial: serial, version: txt["fw"] ?? "")
+        d.host = host; d.port = s.port; d.gone = false
+        devices[key] = d
+        changed()
+        look(key)
+    }
+    func ipv4(_ s: NetService) -> String? {
+        for a in s.addresses ?? [] {
+            let found: String? = a.withUnsafeBytes { raw in
+                guard let sa = raw.baseAddress?.assumingMemoryBound(to: sockaddr.self), sa.pointee.sa_family == UInt8(AF_INET) else { return nil }
+                var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                guard getnameinfo(sa, socklen_t(a.count), &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+                return String(cString: buf)
+            }
+            if let found = found, !found.hasPrefix("169.254.") { return found }
+        }
+        return nil
+    }
+    // Keep each card true: is it there, and for a One, which of its apps are running
+    func look(_ key: String) {
+        guard let d = devices[key] else { return }
+        getJSON("http://\(d.host):\(d.port)/status", timeout: 3) { [weak self] s in
+            guard let self = self, self.devices[key] != nil else { return }
+            self.devices[key]!.gone = s == nil
+            if let s = s, d.kind == "one" || d.kind == "view" { update(&self.devices[key]!, s) }
+            self.changed()
+        }
+        if d.kind == "one" {
+            exists("http://\(d.host):\(d.port)/static/apps/virtual-deck.html") { [weak self] yes in
+                self?.devices[key]?.hasApps = yes
+                self?.changed()
+            }
+        }
+    }
+    func check() { devices.keys.forEach(look) }
+
+    func add(_ host: String) {
+        say("Asking \(host)…", false)
+        probe(host, ports: [8080, 80], timeout: 3) { [weak self] found in
+            guard let self = self else { return }
+            if let d = found { self.keep(d); self.say("", false) }
+            else { self.say("Nothing Downstage answered at \(host).", true) }
+        }
+    }
+    func probe(_ host: String, ports: [Int], timeout: TimeInterval, done: @escaping (Device?) -> Void) {
+        guard let port = ports.first else { return done(nil) }
+        getJSON("http://\(host):\(port)/status", timeout: timeout) { [weak self] s in
+            if let s = s, let d = identify(s, host: host, port: port) { done(d) }
+            else { self?.probe(host, ports: Array(ports.dropFirst()), timeout: timeout, done: done) }
+        }
+    }
+    func keep(_ d: Device) {
+        devices[d.key] = d
+        changed()
+        look(d.key)
+    }
+    // Only when asked: every address on each network this Mac is on, a few at a time
+    func scan() {
+        let ips = localNets().flatMap { n in (1...254).map { "\(n).\($0)" } }
+        guard !ips.isEmpty else { return say("This Mac isn't on a network.", true) }
+        scanState(true)
+        say("Scanning \(ips.count) addresses…", false)
+        var queue = ips[...], left = ips.count, foundCount = 0
+        func next() {
+            guard let ip = queue.popFirst() else { return }
+            probe(ip, ports: [8080, 80], timeout: 0.8) { [weak self] d in
+                guard let self = self else { return }
+                if let d = d { foundCount += 1; if self.devices[d.key] == nil { self.keep(d) } }
+                left -= 1
+                if left == 0 {
+                    self.scanState(false)
+                    self.say(foundCount == 0 ? "The scan found nothing Downstage on this network." : "", foundCount == 0)
+                } else { next() }
+            }
+        }
+        for _ in 0..<12 { next() }
+    }
+    func localNets() -> [String] {
+        var out: [String] = [], head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0 else { return out }
+        defer { freeifaddrs(head) }
+        var p = head
+        while let i = p {
+            defer { p = i.pointee.ifa_next }
+            guard let a = i.pointee.ifa_addr, a.pointee.sa_family == UInt8(AF_INET), i.pointee.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else { continue }
+            var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(a, socklen_t(a.pointee.sa_len), &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let ip = String(cString: buf)
+            if ip.hasPrefix("169.254.") { continue }
+            let net = ip.split(separator: ".").prefix(3).joined(separator: ".")
+            if !out.contains(net) { out.append(net) }
+        }
+        return out
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+    var window: NSWindow!
+    var web: WKWebView!
+    let finder = Finder()
+    var loaded = false
+
+    func applicationDidFinishLaunching(_ note: Notification) {
+        buildMenu()
+        let config = WKWebViewConfiguration()
+        config.userContentController.add(self, name: "find")
+        web = WKWebView(frame: .zero, configuration: config)
+        web.uiDelegate = self
+        web.navigationDelegate = self
+        web.setValue(false, forKey: "drawsBackground")
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.title = "Downstage Find"
+        window.minSize = NSSize(width: 380, height: 300)
+        window.backgroundColor = NSColor(red: 0x0B / 255.0, green: 0x0D / 255.0, blue: 0x10 / 255.0, alpha: 1)
+        window.contentView = web
+        window.center()
+        window.setFrameAutosaveName("DownstageFind")
+        window.makeKeyAndOrderFront(nil)
+        let root = Bundle.main.resourceURL!.appendingPathComponent("web")
+        web.loadFileURL(root.appendingPathComponent("find.html"), allowingReadAccessTo: root)
+        finder.changed = { [weak self] in self?.tell() }
+        finder.say = { [weak self] text, warn in self?.call("window.findSay(\(self?.quoted(text) ?? "''"), \(warn))") }
+        finder.scanState = { [weak self] running in self?.call("window.scanState(\(running))") }
+        finder.start()
+        if let h = ProcessInfo.processInfo.environment["DOWNSTAGE_FIND_ADD"] { finder.add(h) }     // for tests
+    }
+    func quoted(_ s: String) -> String {
+        let d = (try? JSONSerialization.data(withJSONObject: [s])) ?? Data()
+        return String(String(decoding: d, as: UTF8.self).dropFirst().dropLast())
+    }
+    func call(_ js: String) { if loaded { web.evaluateJavaScript(js, completionHandler: nil) } }
+    func tell() {
+        guard let data = try? JSONSerialization.data(withJSONObject: finder.devices.values.map { $0.json }) else { return }
+        if ProcessInfo.processInfo.environment["DOWNSTAGE_FIND_LOG"] != nil { print(String(decoding: data, as: UTF8.self)); fflush(stdout) }   // for tests
+        call("window.devices(\(String(decoding: data, as: UTF8.self)))")
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true; tell() }
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let m = message.body as? [String: Any], let action = m["action"] as? String else { return }
+        switch action {
+        case "open":
+            // only our own http pages on the local network: the page gives the address, never a file or another scheme
+            if let s = m["url"] as? String, let u = URL(string: s), u.scheme == "http" { NSWorkspace.shared.open(u) }
+        case "refresh": finder.refresh()
+        case "scan": finder.scan()
+        case "add": if let h = m["host"] as? String { finder.add(h) }
+        default: break
+        }
+    }
+    // the page's confirm() for the scan
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        let parts = message.components(separatedBy: "\n\n")
+        let a = NSAlert()
+        a.messageText = parts.first ?? ""
+        a.informativeText = parts.dropFirst().joined(separator: "\n\n")
+        a.addButton(withTitle: "Scan")
+        a.addButton(withTitle: "Cancel")
+        completionHandler(a.runModal() == .alertFirstButtonReturn)
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+
+    func buildMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem(); main.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Downstage Find", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        NSApp.mainMenu = main
+    }
+}
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.setActivationPolicy(.regular)
+app.activate(ignoringOtherApps: true)
+app.run()

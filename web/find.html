@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Downstage Find</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Downstage Find: every Downstage device on this network, and a button for each of its apps.
+     The Mac app does the finding (main.swift) and calls window.devices() with what it knows. -->
+<style>
+  @font-face { font-family: 'Rajdhani'; font-weight: 700; src: url('fonts/rajdhani-700.woff2') format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 400; src: url('fonts/inter-400.woff2') format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 600; src: url('fonts/inter-600.woff2') format('woff2'); }
+  :root { --ground: #0B0D10; --panel: #12161B; --raised: #181D23; --edge: #232A32; --text: #E8ECEF; --muted: #9AA4AD;
+          --green: #2FD97B; --amber: #F5A524; --red: #E5484D; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: var(--ground); color: var(--text); font: 400 14px/1.4 'Inter', system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
+  header { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); }
+  header h1 { margin: 0; font: 700 17px 'Rajdhani', system-ui, sans-serif; white-space: nowrap; }
+  header svg { width: 24px; height: 24px; flex: none; }
+  input, button { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--edge); border-radius: 6px; min-height: 32px; padding: 4px 10px; }
+  input { -webkit-user-select: text; user-select: text; width: 170px; }
+  button { cursor: pointer; font-weight: 600; }
+  button:hover { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  .sp { flex: 1; }
+  #say { flex: none; padding: 8px 14px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--edge); }
+  #say:empty { display: none; }
+  #say.warn { color: var(--amber); }
+  main { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start; }
+  .card { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px; background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; }
+  .card.gone { opacity: .55; }
+  .head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .icon { flex: none; width: 52px; height: 52px; object-fit: contain; }
+  .who { min-width: 0; flex: 1; }
+  .name { font: 700 18px/1.15 'Rajdhani', system-ui, sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .addr { font-size: 12.5px; color: var(--muted); -webkit-user-select: text; user-select: text; }
+  .live { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--green); }
+  .gone .live { background: var(--red); }
+  .apps { display: flex; flex-wrap: wrap; gap: 6px; }
+  .apps button.main { border-color: var(--green); }
+  #empty { padding: 48px 20px; text-align: center; color: var(--muted); }
+  #empty b { display: block; margin-bottom: 6px; color: var(--text); font: 700 20px 'Rajdhani', system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<header>
+  <svg viewBox="0 0 96 96" aria-hidden="true"><rect x="6" y="10" width="84" height="66" rx="10" fill="none" stroke="#e8ecef" stroke-width="7"/><rect x="20" y="54" width="40" height="9" rx="4.5" fill="#2fd97b"/><rect x="64" y="54" width="12" height="9" rx="4.5" fill="#e8ecef" opacity="0.28"/><rect x="20" y="83" width="56" height="7" rx="3.5" fill="#2fd97b"/></svg>
+  <h1>Downstage Find</h1>
+  <span class="sp"></span>
+  <input id="addr" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="Add by address" title="A device's address, for a network that hides devices from each other">
+  <button id="scan" title="Knock on every address on this network, for when a device isn't answering the normal search">Scan network…</button>
+  <button id="refresh" title="Ask the network again">Refresh</button>
+</header>
+<div id="say"></div>
+<main>
+  <div id="grid"></div>
+  <div id="empty"></div>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const native = (action, extra) => { try { window.webkit.messageHandlers.find.postMessage(Object.assign({ action }, extra)); } catch (e) {} };
+  const KINDS = {
+    one: ['Downstage One', 'devices/one.svg'], view: ['Downstage View', 'devices/view.png'], relay: ['Cue Relay', 'devices/relay.svg'],
+    cue: ['Cue', 'devices/cue.svg'], tally: ['Cue', 'devices/cue.svg'], lite: ['Cue Lite', 'devices/lite.svg'],
+    mini: ['Cue Mini', 'devices/mini.svg'], 360: ['Cue 360', 'devices/360.svg'],
+  };
+  const ORDER = ['one', 'view', 'relay', 'cue', 'tally', 'lite', 'mini', '360'];
+  let list = [], started = Date.now(), searching = true;
+
+  function appsOf(d) {
+    const base = 'http://' + d.host, page = base + ':' + d.port;
+    if (d.kind !== 'one') return [{ name: 'Open', url: page + '/', main: true }];
+    const a = [{ name: 'Setup', url: page + '/', main: true }, { name: 'Touch', url: page + '/touch' }];
+    if (d.hasApps) a.push({ name: 'Apps', url: page + '/?tab=apps' });
+    if (d.companion) a.push({ name: 'Companion', url: base + ':8000/' });
+    if (d.ontime) a.push({ name: 'OnTime', url: base + ':4001/editor/' });
+    return a;
+  }
+  function draw() {
+    const sorted = list.slice().sort((a, b) => (ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind)) || String(a.name).localeCompare(String(b.name)));
+    $('grid').innerHTML = sorted.map(d => {
+      const k = KINDS[d.kind] || KINDS.cue;
+      const sub = [k[0], d.version].filter(Boolean).join(' · ');
+      const btns = appsOf(d).map(a => '<button class="' + (a.main ? 'main' : '') + '" data-url="' + esc(a.url) + '"' + (d.gone ? ' disabled' : '') + '>' + esc(a.name) + '</button>').join('');
+      return '<div class="card' + (d.gone ? ' gone' : '') + '"><div class="head"><img class="icon" alt="" src="' + esc(k[1]) + '"><div class="who"><div class="name">' + esc(d.name) + '</div><div class="sub">' + esc(sub) + '</div></div><span class="live" title="' + (d.gone ? 'Not answering' : 'On the network') + '"></span></div>' +
+             '<div class="addr">' + esc(d.host) + (d.serial ? ' · ' + esc(d.serial) : '') + '</div><div class="apps">' + btns + '</div></div>';
+    }).join('');
+    const none = !list.length;
+    $('empty').style.display = none ? '' : 'none';
+    if (none) {
+      const waited = Date.now() - started > 5000;
+      $('empty').innerHTML = waited
+        ? '<b>Nothing found yet</b>Check this Mac is on the same network as your devices. Some networks hide devices from each other: add one by its address, or use Scan network.'
+        : '<b>Looking…</b>Asking the network for Downstage devices.';
+    }
+  }
+  window.devices = d => { list = d; draw(); };
+  window.findSay = (text, warn) => { $('say').textContent = text || ''; $('say').className = warn ? 'warn' : ''; };
+  window.scanState = running => { $('scan').disabled = running; $('scan').textContent = running ? 'Scanning…' : 'Scan network…'; };
+
+  $('grid').addEventListener('click', e => { const b = e.target.closest('button[data-url]'); if (b) native('open', { url: b.dataset.url }); });
+  $('refresh').onclick = () => { started = Date.now(); window.findSay(''); native('refresh'); draw(); };
+  $('scan').onclick = () => {
+    if (confirm('Scan this network?\n\nThis knocks on every address on your network. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn’t your network.')) native('scan');
+  };
+  $('addr').onchange = () => {
+    const v = $('addr').value.trim().replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
+    $('addr').value = '';
+    if (v) native('add', { host: v });
+  };
+  setTimeout(draw, 5100);
+  draw();
+</script>
+</body>
+</html>
