@@ -24,6 +24,11 @@
   button:hover { border-color: var(--muted); }
   button:disabled { opacity: .5; cursor: default; }
   .sp { flex: 1; }
+  #upd { display: none; flex: none; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 14px; font-size: 13px; background: var(--raised); border-bottom: 1px solid var(--edge); }
+  #upd.on { display: flex; }
+  #updText { flex: 1; min-width: 160px; }
+  #upd button { min-height: 28px; padding: 2px 10px; }
+  #updGo { border-color: var(--green); }
   #say { flex: none; padding: 8px 14px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--edge); }
   #say:empty { display: none; }
   #say.warn { color: var(--amber); }
@@ -54,6 +59,7 @@
   <button id="scan" title="Knock on every address on this network, for when a device isn't answering the normal search">Scan network…</button>
   <button id="refresh" title="Ask the network again">Refresh</button>
 </header>
+<div id="upd"><span id="updText"></span><button id="updGo">Update now</button><button id="updLater">Later</button></div>
 <div id="say"></div>
 <main>
   <div id="grid"></div>
@@ -101,6 +107,29 @@
   window.devices = d => { list = d; draw(); };
   window.findSay = (text, warn) => { $('say').textContent = text || ''; $('say').className = warn ? 'warn' : ''; };
   window.scanState = running => { $('scan').disabled = running; $('scan').textContent = running ? 'Scanning…' : 'Scan network…'; };
+
+  // ── updates: only inside the Mac app (macapp/updater.swift). A check at launch stays quiet unless there's
+  // something new, because a venue network with no internet isn't news. Nothing installs until it's pressed ──
+  const updBridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.updates;
+  let updLater = false;
+  window.updAsked = false;
+  window.updateState = u => {
+    const line = { checking: 'Checking for updates…', current: u.message || 'You\u2019re up to date.', available: 'Version ' + u.latest + ' is ready.', downloading: 'Downloading ' + u.latest + '…',
+                   installing: 'Installing ' + u.latest + '. The app will reopen.', error: u.message || 'Couldn\u2019t update.' }[u.status];
+    const news = ['available', 'downloading', 'installing'].includes(u.status);
+    if (window.updAsked) updLater = false;
+    $('upd').classList.toggle('on', !!line && !updLater && (news || window.updAsked));
+    $('updText').textContent = 'This is version ' + u.version + '. ' + (line || '');
+    $('updText').title = u.status === 'available' ? (u.notes || '') : '';
+    $('updGo').style.display = u.status === 'available' ? '' : 'none';
+    $('updLater').style.display = u.status === 'installing' || u.status === 'downloading' ? 'none' : '';
+    $('updLater').textContent = u.status === 'available' ? 'Later' : 'Close';
+  };
+  if (updBridge) {
+    $('updGo').onclick = () => { window.updAsked = true; updBridge.postMessage('install'); };
+    $('updLater').onclick = () => { updLater = true; window.updAsked = false; $('upd').classList.remove('on'); };
+    updBridge.postMessage('ready');
+  }
 
   $('grid').addEventListener('click', e => { const b = e.target.closest('button[data-url]'); if (b) native('open', { url: b.dataset.url }); });
   $('refresh').onclick = () => { started = Date.now(); window.findSay(''); native('refresh'); draw(); };

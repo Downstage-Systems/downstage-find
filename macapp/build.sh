@@ -8,7 +8,7 @@ NAME="Downstage Find"; BID=com.downstagesystems.find
 STAGE="$(mktemp -d)"; APP="$STAGE/$NAME.app"; OUT="${DOWNSTAGE_OUT:-$PROJECT/dist}"
 VER="${1:-$(date +%Y.%-m.%-d)}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -target arm64-apple-macos11 -framework Cocoa -framework WebKit "$HERE/main.swift" -o "$APP/Contents/MacOS/$NAME"
+swiftc -O -target arm64-apple-macos11 -framework Cocoa -framework WebKit ${DOWNSTAGE_SWIFT_FLAGS:-} "$HERE/main.swift" "$HERE/updater.swift" -o "$APP/Contents/MacOS/$NAME"
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>

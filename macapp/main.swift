@@ -209,13 +209,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     var window: NSWindow!
     var web: WKWebView!
     let finder = Finder()
+    let updater = Updater()
     var loaded = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "find")
+        config.userContentController.add(updater, name: "updates")
         web = WKWebView(frame: .zero, configuration: config)
+        updater.web = web
         web.uiDelegate = self
         web.navigationDelegate = self
         web.setValue(false, forKey: "drawsBackground")
@@ -234,7 +237,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         finder.say = { [weak self] text, warn in self?.call("window.findSay(\(self?.quoted(text) ?? "''"), \(warn))") }
         finder.scanState = { [weak self] running in self?.call("window.scanState(\(running))") }
         finder.start()
-        if let h = ProcessInfo.processInfo.environment["DOWNSTAGE_FIND_ADD"] { finder.add(h) }     // for tests
+        #if UPDATE_TEST
+        if let h = ProcessInfo.processInfo.environment["DOWNSTAGE_TEST_ADD"] { finder.add(h) }
+        #endif
     }
     func quoted(_ s: String) -> String {
         let d = (try? JSONSerialization.data(withJSONObject: [s])) ?? Data()
@@ -243,7 +248,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     func call(_ js: String) { if loaded { web.evaluateJavaScript(js, completionHandler: nil) } }
     func tell() {
         guard let data = try? JSONSerialization.data(withJSONObject: finder.devices.values.map { $0.json }) else { return }
-        if ProcessInfo.processInfo.environment["DOWNSTAGE_FIND_LOG"] != nil { print(String(decoding: data, as: UTF8.self)); fflush(stdout) }   // for tests
+        #if UPDATE_TEST
+        if ProcessInfo.processInfo.environment["DOWNSTAGE_TEST_LOG"] != nil { print(String(decoding: data, as: UTF8.self)); fflush(stdout) }
+        #endif
         call("window.devices(\(String(decoding: data, as: UTF8.self)))")
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true; tell() }
@@ -269,12 +276,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         a.addButton(withTitle: "Cancel")
         completionHandler(a.runModal() == .alertFirstButtonReturn)
     }
+    @objc func checkForUpdates() {
+        web.evaluateJavaScript("window.updAsked = true") { _, _ in self.updater.check() }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 
     func buildMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem(); main.addItem(appItem)
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About Downstage Find", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
+        appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Quit Downstage Find", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         let editItem = NSMenuItem(); main.addItem(editItem)
