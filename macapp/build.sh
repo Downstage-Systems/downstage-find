@@ -7,6 +7,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; PROJECT="$(dirname "$HERE")"
 NAME="Downstage Find"; BID=com.downstagesystems.find
 STAGE="$(mktemp -d)"; APP="$STAGE/$NAME.app"; OUT="${DOWNSTAGE_OUT:-$PROJECT/dist}"
 VER="${1:-$(date +%Y.%-m.%-d)}"
+# DOWNSTAGE_SIGN=1 signs with Developer ID (release.sh does this); otherwise an ad hoc signature for testing
+TEAMS=""
+if [ -n "${DOWNSTAGE_SIGN:-}" ]; then . "$HERE/signing.conf"; for t in $ALLOWED_TEAMS; do TEAMS="$TEAMS<string>$t</string>"; done; fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -target arm64-apple-macos11 -framework Cocoa -framework WebKit ${DOWNSTAGE_SWIFT_FLAGS:-} "$HERE/main.swift" "$HERE/updater.swift" "$PROJECT/shared/Finder.swift" -o "$APP/Contents/MacOS/$NAME"
 cat > "$APP/Contents/Info.plist" <<PL
@@ -22,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleVersion</key><string>$VER</string>
 <key>LSMinimumSystemVersion</key><string>11.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>DownstageAllowedTeams</key><array>$TEAMS</array>
 <key>NSLocalNetworkUsageDescription</key><string>Downstage Find looks for Downstage devices on your network.</string>
 <key>NSBonjourServices</key><array><string>_downstage._tcp</string></array>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/><key>NSAllowsArbitraryLoadsInWebContent</key><true/></dict>
@@ -30,7 +34,8 @@ PL
 cp "$HERE/AppIcon.icns" "$APP/Contents/Resources/"
 rsync -a --exclude .DS_Store "$PROJECT/web" "$APP/Contents/Resources/"
 xattr -cr "$APP"
-codesign --force --deep -s - --identifier "$BID" "$APP"
+if [ -n "${DOWNSTAGE_SIGN:-}" ]; then codesign --force --options runtime --timestamp -s "$SIGN_ID" --identifier "$BID" "$APP"
+else codesign --force --deep -s - --identifier "$BID" "$APP"; fi
 codesign --verify --deep --strict "$APP" && echo "signed"
 mkdir -p "$OUT"
 ZIP="$OUT/Downstage-Find.zip"

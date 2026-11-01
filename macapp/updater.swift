@@ -112,7 +112,11 @@ final class Updater: NSObject, WKScriptMessageHandler {
         guard new.bundleIdentifier == Bundle.main.bundleIdentifier else { throw refuse("The download is a different app.") }
         guard let v = new.infoDictionary?["CFBundleShortVersionString"] as? String, Updater.isNewer(v, than: current) else {
             throw refuse("The download isn't newer than this version.") }
-        guard run("/usr/bin/codesign", ["--verify", "--deep", "--strict", items[0].path]) else { throw refuse("The download failed its signature check.") }
+        // A signed app only takes an update signed by a team it lists (signing.conf). An unsigned one, or a test build, lists none
+        var verify = ["--verify", "--deep", "--strict"]
+        let teams = Bundle.main.infoDictionary?["DownstageAllowedTeams"] as? [String] ?? []
+        if !teams.isEmpty { verify.append("-R=anchor apple generic and (" + teams.map { "certificate leaf[subject.OU] = \"\($0)\"" }.joined(separator: " or ") + ")") }
+        guard run("/usr/bin/codesign", verify + [items[0].path]) else { throw refuse("The download failed its signature check.") }
         // the swap happens after this app has quit; a failed move puts the old app back
         let script = dir.appendingPathComponent("swap.sh")
         let q = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
