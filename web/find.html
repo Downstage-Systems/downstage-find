@@ -5,7 +5,7 @@
 <title>Downstage Find</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- Downstage Find: every Downstage device on this network, and a button for each of its apps.
-     The Mac app does the finding (main.swift) and calls window.devices() with what it knows. -->
+     The Mac or iOS app does the finding (shared/Finder.swift) and calls window.devices() with what it knows. -->
 <style>
   @font-face { font-family: 'Rajdhani'; font-weight: 700; src: url('fonts/rajdhani-700.woff2') format('woff2'); }
   @font-face { font-family: 'Inter'; font-weight: 400; src: url('fonts/inter-400.woff2') format('woff2'); }
@@ -15,13 +15,16 @@
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body { display: flex; flex-direction: column; background: var(--ground); color: var(--text); font: 400 14px/1.4 'Inter', system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
-  header { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); }
+  header { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 8px; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); }
   header h1 { margin: 0; font: 700 17px 'Rajdhani', system-ui, sans-serif; white-space: nowrap; }
   header svg { width: 24px; height: 24px; flex: none; }
-  input, button { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--edge); border-radius: 6px; min-height: 32px; padding: 4px 10px; }
-  input { -webkit-user-select: text; user-select: text; width: 170px; }
-  button { cursor: pointer; font-weight: 600; }
+  input, button { box-sizing: border-box; height: 34px; min-height: 34px; padding: 0 10px; font: 400 14px/1 'Inter', system-ui, sans-serif; color: var(--text); background-color: var(--raised); border: 1px solid var(--edge); }
+  input { border-radius: 4px; -webkit-user-select: text; user-select: text; }
+  input::placeholder { color: var(--muted); }
+  input:focus { outline: none; border-color: var(--muted); }
+  button { border-radius: 6px; font-weight: 600; white-space: nowrap; cursor: pointer; }
   button:hover { border-color: var(--muted); }
+  input { width: 170px; }
   button:disabled { opacity: .5; cursor: default; }
   .sp { flex: 1; }
   #upd { display: none; flex: none; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 14px; font-size: 13px; background: var(--raised); border-bottom: 1px solid var(--edge); }
@@ -100,7 +103,7 @@
     if (none) {
       const waited = Date.now() - started > 5000;
       $('empty').innerHTML = waited
-        ? '<b>Nothing found yet</b>Check this Mac is on the same network as your devices. Some networks hide devices from each other: add one by its address, or use Scan network.'
+        ? '<b>Nothing found yet</b>Check ' + (window.downstageMobile ? 'Local Network is on for this app in Settings, and that this ' + window.downstageMobile : 'this Mac') + ' is on the same network as your devices. Some networks hide devices from each other: add one by its address, or use Scan network.'
         : '<b>Looking…</b>Asking the network for Downstage devices.';
     }
   }
