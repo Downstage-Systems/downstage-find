@@ -13,7 +13,12 @@ final class FindController: ShellController {
       #say { padding-left: calc(14px + var(--sa-l)) !important; padding-right: calc(14px + var(--sa-r)) !important; }
       main { padding: 14px calc(14px + var(--sa-r)) calc(14px + var(--sa-b)) calc(14px + var(--sa-l)) !important; }
     """ }
-    override func configure(_ c: WKUserContentController) { c.add(self, name: "find") }
+    override func configure(_ c: WKUserContentController) {
+        c.add(self, name: "find")
+        // the version sits at the foot of the list
+        c.addUserScript(WKUserScript(source: "(function () { const v = document.createElement('div'); v.style.cssText = 'margin-top: 18px; text-align: center; font-size: 12px; color: var(--muted);'; v.textContent = '\(versionText)'; document.querySelector('main').appendChild(v); })();",
+                                     injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+    }
     override func viewDidLoad() {
         super.viewDidLoad()
         finder.changed = { [weak self] in self?.tell() }

@@ -13,6 +13,9 @@ private let mobileStyle = """
   * { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
 """
 
+// what the app says it is, for support: "what version are you on?"
+let versionText = "Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")"
+
 class ShellController: UIViewController, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var web: WKWebView!
     var loaded = false
