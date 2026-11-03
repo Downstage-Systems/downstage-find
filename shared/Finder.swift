@@ -79,25 +79,39 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     var scanState: (Bool) -> Void = { _ in }
     var timer: Timer?
 
+    // heard: Bonjour has answered at least once, so Local Network is allowed. blocked: the warning is up
+    var heard = false, blocked = false, retries = 0
+
     func start() {
-        browser.delegate = self
-        browser.searchForServices(ofType: "_downstage._tcp.", inDomain: "local.")
+        search()
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.check() }
     }
-    func refresh() {
+    func search() {
         browser.stop()
         services = []
         browser = NetServiceBrowser()
-        devices = devices.filter { !$0.value.gone }
-        changed()
         browser.delegate = self
         browser.searchForServices(ofType: "_downstage._tcp.", inDomain: "local.")
+    }
+    func refresh() {
+        retries = 0
+        devices = devices.filter { !$0.value.gone }
+        changed()
+        search()
         check()
     }
+    // A search also stops when iOS puts the app in the background, so a failure only means "blocked" until Bonjour has
+    // answered once. Either way it tries again a few times on its own
     func netServiceBrowser(_ b: NetServiceBrowser, didNotSearch err: [String: NSNumber]) {
-        say(blockedSearchHelp, true)
+        guard b === browser else { return }
+        if !heard { blocked = true; say(blockedSearchHelp, true) }
+        guard retries < 3 else { return }
+        retries += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.search() }
     }
     func netServiceBrowser(_ b: NetServiceBrowser, didFind s: NetService, moreComing: Bool) {
+        heard = true; retries = 0
+        if blocked { blocked = false; say("", false) }
         services.append(s)
         s.delegate = self
         s.resolve(withTimeout: 5)
