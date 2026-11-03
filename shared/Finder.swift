@@ -21,9 +21,10 @@ struct Device {
     var ontime = false
     var hasApps = false
     var gone = false
+    var health: [String: Any] = [:]   // a light's own report, worded by the page
     var json: [String: Any] {
         ["key": key, "kind": kind, "name": name, "host": host, "port": port, "serial": serial, "version": version,
-         "companion": companion, "ontime": ontime, "hasApps": hasApps, "gone": gone]
+         "companion": companion, "ontime": ontime, "hasApps": hasApps, "gone": gone, "health": health]
     }
 }
 
@@ -68,6 +69,16 @@ func update(_ d: inout Device, _ s: [String: Any]) {
     if let v = s["os_version"] as? String { d.version = v }
     d.companion = s["companion_running"] as? Bool ?? false
     d.ontime = s["ontime_running"] as? Bool ?? false
+}
+
+// Only what the card's health line needs from a light's /status: its Companion state, its own reason when it can't work,
+// how its WiFi or CueLink is doing, and a battery if it has one
+func lightHealth(_ s: [String: Any]) -> [String: Any] {
+    var h: [String: Any] = [:]
+    for k in ["setup", "companion", "why", "rssi", "ssid", "battery", "charging"] { if let v = s[k] { h[k] = v } }
+    if let l = s["loss"] as? [String: Any] { h["weak"] = l["weak"] }
+    if let l = s["link"] as? [String: Any] { h["relayed"] = l["relayed"]; h["via"] = l["via"] }
+    return h
 }
 
 final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
@@ -152,6 +163,7 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
             guard let self = self, self.devices[key] != nil else { return }
             self.devices[key]!.gone = s == nil
             if let s = s, d.kind == "one" || d.kind == "view" { update(&self.devices[key]!, s) }
+            else if let s = s, d.kind != "relay" { self.devices[key]!.health = lightHealth(s) }
             self.changed()
         }
         if d.kind == "one" {

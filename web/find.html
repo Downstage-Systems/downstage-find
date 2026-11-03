@@ -47,6 +47,8 @@
   .addr { font-size: 12.5px; color: var(--muted); -webkit-user-select: text; user-select: text; }
   .live { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--green); }
   .gone .live { background: var(--red); }
+  .health { margin-top: -4px; font-size: 13px; color: var(--green); }
+  .health.warn { color: var(--amber); }
   .apps { display: flex; flex-wrap: wrap; gap: 6px; }
   .apps button.main { border-color: var(--green); }
   #pull { height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 12.5px; color: var(--muted); }
@@ -92,6 +94,30 @@
     if (d.ontime) a.push({ name: 'OnTime', url: base + ':4001/editor/' });
     return a;
   }
+  // A light's health in one line, worded like its own page: amber when something needs a look
+  function healthOf(d) {
+    const h = d.health, c = String(h && h.companion || '');
+    if (!h || d.gone || !Object.keys(h).length) return null;
+    const near = id => { const o = list.find(x => x.key === id); return o ? o.name : 'its Relay'; };
+    let warn = true, text;
+    if (h.setup) text = 'In setup: join its hotspot to choose a network';
+    else if (h.why) text = h.why;
+    else if (h.relayed) { warn = false; text = 'Live, linked to ' + near(h.via); }
+    else if (/^live/.test(c)) { warn = false; text = 'Live on Companion'; }
+    else if (/no Companion host/.test(c)) text = 'No Companion set';
+    else if (/its Cue/.test(c)) text = 'Waiting for the Cue it is linked to';
+    else if (/network/.test(c)) text = 'Waiting for a network';
+    else text = 'Finding Companion';
+    const more = [];
+    if (h.weak === 1 || (!h.relayed && h.ssid && h.rssi < -75)) { warn = true; more.push('Weak WiFi' + (h.rssi ? ' (' + h.rssi + ' dBm)' : '')); }
+    if (h.weak === 2) { warn = true; more.push('Weak CueLink'); }
+    if (typeof h.battery === 'number') {
+      const low = h.battery < 20 && !h.charging;
+      if (low) warn = true;
+      more.push('Battery ' + h.battery + '%' + (h.charging ? ', charging' : ''));
+    }
+    return { warn, text: [text].concat(more).join(' · ') };
+  }
   function draw() {
     const sorted = list.slice().sort((a, b) => (ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind)) || String(a.name).localeCompare(String(b.name)));
     $('grid').innerHTML = sorted.map(d => {
@@ -99,8 +125,10 @@
       const sub = [k[0], d.version].filter(Boolean).join(' · ');
       const btns = appsOf(d).map(a => '<button class="' + (a.main ? 'main' : '') + '" data-url="' + esc(a.url) + '"' + (d.gone ? ' disabled' : '') + '>' + esc(a.name) + '</button>').join('') +
         (d.kind === 'one' || d.kind === 'view' ? '' : '<button data-blink="' + esc(d.key) + '" title="Blink this ' + (d.kind === 'relay' ? 'Relay' : 'light') + ' so you can see which one it is"' + (d.gone || blinking[d.key] ? ' disabled' : '') + '>' + (blinking[d.key] ? 'Blinking…' : 'Identify') + '</button>');
+      const h = healthOf(d);
       return '<div class="card' + (d.gone ? ' gone' : '') + '"><div class="head"><img class="icon" alt="" src="' + esc(k[1]) + '"><div class="who"><div class="name">' + esc(d.name) + '</div><div class="sub">' + esc(sub) + '</div></div><span class="live" title="' + (d.gone ? 'Not answering' : 'On the network') + '"></span></div>' +
-             '<div class="addr">' + esc(d.host) + (d.serial ? ' · ' + esc(d.serial) : '') + '</div><div class="apps">' + btns + '</div></div>';
+             '<div class="addr">' + esc(d.host) + (d.serial ? ' · ' + esc(d.serial) : '') + '</div>' +
+             (h ? '<div class="health' + (h.warn ? ' warn' : '') + '">' + esc(h.text) + '</div>' : '') + '<div class="apps">' + btns + '</div></div>';
     }).join('');
     const none = !list.length;
     $('empty').style.display = none ? '' : 'none';
