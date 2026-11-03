@@ -116,8 +116,11 @@
     else if (/network/.test(c)) text = 'Waiting for a network';
     else text = 'Finding Companion';
     const more = [];
-    if (h.weak === 1 || (!h.relayed && h.ssid && h.rssi < -75)) { warn = true; more.push('Weak WiFi' + (h.rssi ? ' (' + h.rssi + ' dBm)' : '')); }
-    if (h.weak === 2) { warn = true; more.push('Weak CueLink'); }
+    // weak is the light's own packet loss to its gateway or its Cue, held 10 s, so it can be high at a strong signal:
+    // the signal is its own line (Cue Coding, 2026-11-03)
+    if (h.weak === 1) { warn = true; more.push('WiFi dropping packets'); }
+    if (h.weak === 2) { warn = true; more.push('CueLink dropping packets'); }
+    if (!h.relayed && h.ssid && h.rssi < -75) { warn = true; more.push('Weak WiFi signal (' + h.rssi + ' dBm)'); }
     if (typeof h.battery === 'number') {
       const low = h.battery < 20 && !h.charging;
       if (low) warn = true;
@@ -130,7 +133,7 @@
   function brightOf(d) {
     const h = d.health || {}, rows = [];
     if (typeof h.brightpct === 'number') rows.push(['light', 'Brightness', h.brightpct, !!h.tokenSet]);
-    if (typeof h.hexBright === 'number') rows.push(['hex', 'Hex', h.hexBright, false]);
+    if (typeof h.hexBright === 'number') rows.push(['hex', 'Hex', h.hexBright, !!h.tokenSet]);   // /follow takes the PIN too since 0.186.39
     if (!rows.length || d.gone) return '';
     const html = rows.map(([part, label, v, locked]) => {
       const id = d.key + ':' + part, w = held[id];

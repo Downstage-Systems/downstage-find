@@ -73,7 +73,7 @@ func update(_ d: inout Device, _ s: [String: Any]) {
 
 // Only what the card's health line needs from a light's /status: its Companion state, its own reason when it can't work,
 // how its WiFi or CueLink is doing, and a battery if it has one. Its brightness and its Hex's (0.186.38) ride along for
-// the sliders, with whether a Cue PIN guards the light's own
+// the sliders, with whether a Cue PIN guards them
 func lightHealth(_ s: [String: Any]) -> [String: Any] {
     var h: [String: Any] = [:]
     for k in ["setup", "companion", "why", "rssi", "ssid", "battery", "charging", "brightpct", "tokenSet"] { if let v = s[k] { h[k] = v } }
