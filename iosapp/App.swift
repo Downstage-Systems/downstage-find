@@ -44,6 +44,7 @@ final class FindController: ShellController {
         case "refresh": finder.refresh()
         case "scan": finder.scan()
         case "add": if let h = m["host"] as? String { finder.add(h) }
+        case "identify": if let k = m["key"] as? String { finder.blink(k) }
         default: break
         }
     }

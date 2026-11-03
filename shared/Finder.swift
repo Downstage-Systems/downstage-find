@@ -157,6 +157,15 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
             else { self.say("Nothing Downstage answered at \(host).", true) }
         }
     }
+    // "Which light is this?": a light blinks white for 5 s, a Relay flashes its LED for 6 s. No PIN, nothing else changes
+    func blink(_ key: String) {
+        guard let d = devices[key], d.kind != "one", d.kind != "view", let u = URL(string: "http://\(d.host):\(d.port)/identify") else { return }
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 3
+        URLSession.shared.dataTask(with: r) { [weak self] _, resp, _ in
+            let ok = (resp as? HTTPURLResponse)?.statusCode == 200
+            DispatchQueue.main.async { if !ok { self?.say("\(d.name) didn't answer.", true) } }
+        }.resume()
+    }
     func probe(_ host: String, ports: [Int], timeout: TimeInterval, done: @escaping (Device?) -> Void) {
         guard let port = ports.first else { return done(nil) }
         getJSON("http://\(host):\(port)/status", timeout: timeout) { [weak self] s in

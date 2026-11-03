@@ -78,7 +78,7 @@
     mini: ['Cue Mini', 'devices/mini.svg'], 360: ['Cue 360', 'devices/360.svg'],
   };
   const ORDER = ['one', 'view', 'relay', 'cue', 'tally', 'lite', 'mini', '360'];
-  let list = [], started = Date.now(), searching = true;
+  let list = [], started = Date.now(), searching = true, blinking = {};
 
   function appsOf(d) {
     const base = 'http://' + d.host, page = base + ':' + d.port;
@@ -94,7 +94,8 @@
     $('grid').innerHTML = sorted.map(d => {
       const k = KINDS[d.kind] || KINDS.cue;
       const sub = [k[0], d.version].filter(Boolean).join(' · ');
-      const btns = appsOf(d).map(a => '<button class="' + (a.main ? 'main' : '') + '" data-url="' + esc(a.url) + '"' + (d.gone ? ' disabled' : '') + '>' + esc(a.name) + '</button>').join('');
+      const btns = appsOf(d).map(a => '<button class="' + (a.main ? 'main' : '') + '" data-url="' + esc(a.url) + '"' + (d.gone ? ' disabled' : '') + '>' + esc(a.name) + '</button>').join('') +
+        (d.kind === 'one' || d.kind === 'view' ? '' : '<button data-blink="' + esc(d.key) + '" title="Blink this ' + (d.kind === 'relay' ? 'Relay' : 'light') + ' so you can see which one it is"' + (d.gone || blinking[d.key] ? ' disabled' : '') + '>' + (blinking[d.key] ? 'Blinking…' : 'Identify') + '</button>');
       return '<div class="card' + (d.gone ? ' gone' : '') + '"><div class="head"><img class="icon" alt="" src="' + esc(k[1]) + '"><div class="who"><div class="name">' + esc(d.name) + '</div><div class="sub">' + esc(sub) + '</div></div><span class="live" title="' + (d.gone ? 'Not answering' : 'On the network') + '"></span></div>' +
              '<div class="addr">' + esc(d.host) + (d.serial ? ' · ' + esc(d.serial) : '') + '</div><div class="apps">' + btns + '</div></div>';
     }).join('');
@@ -134,7 +135,17 @@
     updBridge.postMessage('ready');
   }
 
-  $('grid').addEventListener('click', e => { const b = e.target.closest('button[data-url]'); if (b) native('open', { url: b.dataset.url }); });
+  $('grid').addEventListener('click', e => {
+    const b = e.target.closest('button[data-url]');
+    if (b) return native('open', { url: b.dataset.url });
+    // the light blinks for about 5 s, so the button rests that long and a second press doesn't stack
+    const k = (e.target.closest('button[data-blink]') || {}).dataset;
+    if (!k || !k.blink) return;
+    const key = k.blink;
+    native('identify', { key });
+    blinking[key] = setTimeout(() => { delete blinking[key]; draw(); }, 5000);
+    draw();
+  });
   $('refresh').onclick = () => { started = Date.now(); window.findSay(''); native('refresh'); draw(); };
   $('scan').onclick = () => {
     if (confirm('Scan this network?\n\nThis knocks on every address on your network. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn’t your network.')) native('scan');
