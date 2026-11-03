@@ -49,6 +49,12 @@
   .gone .live { background: var(--red); }
   .health { margin-top: -4px; font-size: 13px; color: var(--green); }
   .health.warn { color: var(--amber); }
+  .bright { display: flex; flex-direction: column; gap: 2px; margin-top: -4px; }
+  .bright label { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .bright label > span { flex: none; width: 74px; }
+  .bright input { flex: 1; width: auto; min-width: 0; height: 26px; min-height: 0; padding: 0; border: 0; background: none; accent-color: var(--green); }
+  .bright b { flex: none; width: 38px; text-align: right; font-weight: 600; color: var(--text); }
+  .bright .note { font-size: 12px; color: var(--muted); }
   .apps { display: flex; flex-wrap: wrap; gap: 6px; }
   .apps button.main { border-color: var(--green); }
   #pull { height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 12.5px; color: var(--muted); }
@@ -83,7 +89,7 @@
     mini: ['Cue Mini', 'devices/mini.svg'], 360: ['Cue 360', 'devices/360.svg'],
   };
   const ORDER = ['one', 'view', 'relay', 'cue', 'tally', 'lite', 'mini', '360'];
-  let list = [], started = Date.now(), searching = true, blinking = {};
+  let list = [], started = Date.now(), searching = true, blinking = {}, held = {}, sliding = false;
 
   function appsOf(d) {
     const base = 'http://' + d.host, page = base + ':' + d.port;
@@ -119,6 +125,23 @@
     }
     return { warn, text: [text].concat(more).join(' · ') };
   }
+  // A light's own brightness and its Hex's, where its /status has them (0.186.38): always a percent, 1-100. A value
+  // just sent is held until the light reports it, so the slider doesn't jump back while the next look is on its way
+  function brightOf(d) {
+    const h = d.health || {}, rows = [];
+    if (typeof h.brightpct === 'number') rows.push(['light', 'Brightness', h.brightpct, !!h.tokenSet]);
+    if (typeof h.hexBright === 'number') rows.push(['hex', 'Hex', h.hexBright, false]);
+    if (!rows.length || d.gone) return '';
+    const html = rows.map(([part, label, v, locked]) => {
+      const id = d.key + ':' + part, w = held[id];
+      if (w && (w.pct === v || Date.now() > w.until)) delete held[id];
+      const pct = held[id] ? held[id].pct : v;
+      return '<label' + (locked ? ' title="This light has a Cue PIN. Change its brightness in Settings."' : '') + '><span>' + label + '</span>' +
+             '<input type="range" min="1" max="100" step="1" value="' + pct + '" data-key="' + esc(d.key) + '" data-part="' + part + '"' + (locked ? ' disabled' : '') + '>' +
+             '<b>' + pct + '%</b></label>';
+    }).join('');
+    return '<div class="bright">' + html + (rows.some(r => r[3]) ? '<div class="note">Cue PIN set: change its brightness in Settings</div>' : '') + '</div>';
+  }
   function draw() {
     const sorted = list.slice().sort((a, b) => (ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind)) || String(a.name).localeCompare(String(b.name)));
     $('grid').innerHTML = sorted.map(d => {
@@ -129,7 +152,7 @@
       const h = healthOf(d);
       return '<div class="card' + (d.gone ? ' gone' : '') + '"><div class="head"><img class="icon" alt="" src="' + esc(k[1]) + '"><div class="who"><div class="name">' + esc(d.name) + '</div><div class="sub">' + esc(sub) + '</div></div><span class="live" title="' + (d.gone ? 'Not answering' : 'On the network') + '"></span></div>' +
              '<div class="addr">' + esc(d.host) + (d.serial ? ' · ' + esc(d.serial) : '') + '</div>' +
-             (h ? '<div class="health' + (h.warn ? ' warn' : '') + '">' + esc(h.text) + '</div>' : '') + '<div class="apps">' + btns + '</div></div>';
+             (h ? '<div class="health' + (h.warn ? ' warn' : '') + '">' + esc(h.text) + '</div>' : '') + brightOf(d) + '<div class="apps">' + btns + '</div></div>';
     }).join('');
     const none = !list.length;
     $('empty').style.display = none ? '' : 'none';
@@ -140,7 +163,8 @@
         : '<b>Looking…</b>Asking the network for Downstage devices.';
     }
   }
-  window.devices = d => { list = d; draw(); };
+  // a card redrawn mid-drag would drop the slider out from under the finger, so a drag holds the redraws
+  window.devices = d => { list = d; if (!sliding) draw(); };
   window.findSay = (text, warn) => { $('say').textContent = text || ''; $('say').className = warn ? 'warn' : ''; };
   window.scanState = running => { $('scan').disabled = running; $('scan').textContent = running ? 'Scanning…' : 'Scan network…'; };
 
@@ -178,6 +202,22 @@
     blinking[key] = setTimeout(() => { delete blinking[key]; draw(); }, 5000);
     draw();
   });
+  // the number follows the drag; the light hears once, when the slider is let go (each change is written to its flash)
+  $('grid').addEventListener('pointerdown', e => { if (e.target.matches('input[type=range]')) sliding = true; });
+  $('grid').addEventListener('input', e => {
+    if (e.target.matches('input[type=range]')) e.target.nextElementSibling.textContent = e.target.value + '%';
+  });
+  $('grid').addEventListener('change', e => {
+    const r = e.target;
+    if (!r.matches('input[type=range]')) return;
+    const pct = Math.max(1, Math.min(100, Math.round(+r.value)));
+    held[r.dataset.key + ':' + r.dataset.part] = { pct, until: Date.now() + 5000 };
+    native('bright', { key: r.dataset.key, part: r.dataset.part, pct });
+    sliding = false; draw();
+  });
+  const letGo = () => { if (sliding) setTimeout(() => { if (sliding) { sliding = false; draw(); } }, 0); };
+  window.addEventListener('pointerup', letGo);
+  window.addEventListener('pointercancel', letGo);
   $('refresh').onclick = () => { started = Date.now(); window.findSay(''); native('refresh'); draw(); };
   $('scan').onclick = () => {
     if (confirm('Scan this network?\n\nThis knocks on every address on your network. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn’t your network.')) native('scan');
@@ -193,7 +233,8 @@
     let from = null, dy = 0;
     const show = (h, text) => { pull.style.height = h + 'px'; pull.textContent = text; };
     main.addEventListener('touchstart', e => {
-      from = main.scrollTop <= 0 && e.touches.length === 1 ? e.touches[0].clientY : null;
+      // a brightness slider is dragged, not pulled
+      from = main.scrollTop <= 0 && e.touches.length === 1 && !e.target.closest('input[type=range]') ? e.touches[0].clientY : null;
       dy = 0; pull.classList.remove('back');
     }, { passive: true });
     main.addEventListener('touchmove', e => {

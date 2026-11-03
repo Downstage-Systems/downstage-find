@@ -72,12 +72,14 @@ func update(_ d: inout Device, _ s: [String: Any]) {
 }
 
 // Only what the card's health line needs from a light's /status: its Companion state, its own reason when it can't work,
-// how its WiFi or CueLink is doing, and a battery if it has one
+// how its WiFi or CueLink is doing, and a battery if it has one. Its brightness and its Hex's (0.186.38) ride along for
+// the sliders, with whether a Cue PIN guards the light's own
 func lightHealth(_ s: [String: Any]) -> [String: Any] {
     var h: [String: Any] = [:]
-    for k in ["setup", "companion", "why", "rssi", "ssid", "battery", "charging"] { if let v = s[k] { h[k] = v } }
+    for k in ["setup", "companion", "why", "rssi", "ssid", "battery", "charging", "brightpct", "tokenSet"] { if let v = s[k] { h[k] = v } }
     if let l = s["loss"] as? [String: Any] { h["weak"] = l["weak"] }
     if let l = s["link"] as? [String: Any] { h["relayed"] = l["relayed"]; h["via"] = l["via"] }
+    if let x = s["hex"] as? [String: Any] { h["hexBright"] = x["bright"] }
     return h
 }
 
@@ -190,6 +192,35 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
         URLSession.shared.dataTask(with: r) { [weak self] _, resp, _ in
             let ok = (resp as? HTTPURLResponse)?.statusCode == 200
             DispatchQueue.main.async { if !ok { self?.say("\(d.name) didn't answer.", true) } }
+        }.resume()
+    }
+    // A light's brightness, or its Hex's, as a percent 1-100: live on the light, no restart, kept. The page sends it once,
+    // when the slider is let go, because each change is written to the light's flash. No answer at all gets one more try:
+    // the same value twice changes nothing (one in eight went unanswered on the bench Mini)
+    func bright(_ key: String, part: String, pct: Int, again: Bool = true) {
+        guard let d = devices[key], (1...100).contains(pct) else { return }
+        let hex = part == "hex"
+        guard let u = URL(string: "http://\(d.host):\(d.port)" + (hex ? "/follow" : "/api/v1/brightness")) else { return }
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 3
+        r.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        r.httpBody = (hex ? "part=hex&bright=\(pct)" : "pct=\(pct)").data(using: .utf8)
+        URLSession.shared.dataTask(with: r) { [weak self] _, resp, _ in
+            let code = (resp as? HTTPURLResponse)?.statusCode
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if code == nil && again {
+                    return DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.bright(key, part: part, pct: pct, again: false) }
+                }
+                if code == 200 {
+                    self.devices[key]?.health[hex ? "hexBright" : "brightpct"] = pct
+                    self.changed()
+                } else if code == 401 {
+                    self.say("\(d.name) has a Cue PIN. Change its brightness in Settings.", true)
+                } else {
+                    self.say("\(d.name) didn't take the brightness.", true)
+                }
+                self.look(key)
+            }
         }.resume()
     }
     func probe(_ host: String, ports: [Int], timeout: TimeInterval, done: @escaping (Device?) -> Void) {
