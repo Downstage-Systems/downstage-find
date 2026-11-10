@@ -20,11 +20,12 @@ struct Device {
     var companion = false
     var ontime = false
     var hasApps = false
+    var hasShow = false
     var gone = false
     var health: [String: Any] = [:]   // a light's own report, worded by the page
     var json: [String: Any] {
         ["key": key, "kind": kind, "name": name, "host": host, "port": port, "serial": serial, "version": version,
-         "companion": companion, "ontime": ontime, "hasApps": hasApps, "gone": gone, "health": health]
+         "companion": companion, "ontime": ontime, "hasApps": hasApps, "hasShow": hasShow, "gone": gone, "health": health]
     }
 }
 
@@ -171,6 +172,11 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
         if d.kind == "one" {
             exists("http://\(d.host):\(d.port)/static/apps/virtual-deck.html") { [weak self] yes in
                 self?.devices[key]?.hasApps = yes
+                self?.changed()
+            }
+            // Show mode came with the One's show-mode pages: only offer it on a One that has it
+            exists("http://\(d.host):\(d.port)/show") { [weak self] yes in
+                self?.devices[key]?.hasShow = yes
                 self?.changed()
             }
         }

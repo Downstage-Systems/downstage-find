@@ -95,8 +95,12 @@
     const base = 'http://' + d.host, page = base + ':' + d.port;
     // a device's own page is its Settings, on every device (Rob, 2026-11-03)
     if (d.kind !== 'one') return [{ name: 'Settings', url: page + '/', main: true }];
-    const a = [{ name: 'Settings', url: page + '/', main: true }, { name: 'Touch', url: page + '/touch' }];
-    if (d.hasApps) a.push({ name: 'Apps', url: page + '/?tab=apps' });
+    // a One's plain / follows that browser's last choice (Touch or Show mode), so Settings asks for Full setup, which
+    // opens on its Dashboard (one-system-ui.md, 2026-11-09)
+    const a = [{ name: 'Settings', url: page + '/?browser=1', main: true }];
+    if (d.hasShow) a.push({ name: 'Show mode', url: page + '/show' });
+    a.push({ name: 'Touch', url: page + '/touch' });
+    if (d.hasApps) a.push({ name: 'Apps', url: page + '/?browser=1&tab=apps' });
     if (d.companion) a.push({ name: 'Companion', url: base + ':8000/' });
     if (d.ontime) a.push({ name: 'OnTime', url: base + ':4001/editor/' });
     return a;
