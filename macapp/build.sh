@@ -11,7 +11,7 @@ VER="${1:-$(date +%Y.%-m.%-d)}"
 TEAMS=""
 if [ -n "${DOWNSTAGE_SIGN:-}" ]; then . "$HERE/signing.conf"; for t in $ALLOWED_TEAMS; do TEAMS="$TEAMS<string>$t</string>"; done; fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -target arm64-apple-macos11 -framework Cocoa -framework WebKit ${DOWNSTAGE_SWIFT_FLAGS:-} "$HERE/main.swift" "$HERE/updater.swift" "$PROJECT/shared/Finder.swift" -o "$APP/Contents/MacOS/$NAME"
+swiftc -O -target arm64-apple-macos11 -framework Cocoa -framework WebKit ${DOWNSTAGE_SWIFT_FLAGS:-} "$HERE/main.swift" "$HERE/updater.swift" "$HERE/watch.swift" "$PROJECT/shared/Finder.swift" -o "$APP/Contents/MacOS/$NAME"
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
