@@ -229,6 +229,11 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
             }
         }.resume()
     }
+    // Off the list until it's heard of again: Bonjour or a look brings it back
+    func forget(_ key: String) {
+        devices.removeValue(forKey: key)
+        changed()
+    }
     func probe(_ host: String, ports: [Int], timeout: TimeInterval, done: @escaping (Device?) -> Void) {
         guard let port = ports.first else { return done(nil) }
         getJSON("http://\(host):\(port)/status", timeout: timeout) { [weak self] s in

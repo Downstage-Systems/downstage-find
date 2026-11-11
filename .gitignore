@@ -1,3 +1,4 @@
 dist/
 *.app/
 .DS_Store
+app-backups/

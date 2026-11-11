@@ -8,15 +8,11 @@ final class FindController: ShellController {
     let finder = Finder()
     override var pageURL: URL { pageRoot.appendingPathComponent("find.html") }
 
-    override var appStyle: String { """
-      header { padding: calc(10px + var(--sa-t)) calc(14px + var(--sa-r)) 10px calc(14px + var(--sa-l) + var(--win-l)) !important; }
-      #say { padding-left: calc(14px + var(--sa-l)) !important; padding-right: calc(14px + var(--sa-r)) !important; }
-      main { padding: 14px calc(14px + var(--sa-r)) calc(14px + var(--sa-b)) calc(14px + var(--sa-l)) !important; }
-    """ }
+    // the page keeps itself clear of the notch and the home bar with the --sa-* insets the shell sets
     override func configure(_ c: WKUserContentController) {
         c.add(self, name: "find")
         // the version sits at the foot of the list
-        c.addUserScript(WKUserScript(source: "(function () { const v = document.createElement('div'); v.style.cssText = 'margin-top: 18px; text-align: center; font-size: 12px; color: var(--muted);'; v.textContent = '\(versionText)'; document.querySelector('main').appendChild(v); })();",
+        c.addUserScript(WKUserScript(source: "(function () { const v = document.createElement('div'); v.style.cssText = 'margin-top: 18px; text-align: center; font-size: 12px; color: var(--meta);'; v.textContent = '\(versionText)'; document.querySelector('main').appendChild(v); })();",
                                      injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     }
     override func viewDidLoad() {
@@ -45,6 +41,8 @@ final class FindController: ShellController {
         case "scan": finder.scan()
         case "add": if let h = m["host"] as? String { finder.add(h) }
         case "identify": if let k = m["key"] as? String { finder.blink(k) }
+        case "forget": if let k = m["key"] as? String { finder.forget(k) }
+        case "copy": if let t = m["text"] as? String { UIPasteboard.general.string = t }
         case "bright": if let k = m["key"] as? String, let p = m["pct"] as? Int { finder.bright(k, part: m["part"] as? String ?? "light", pct: p) }
         default: break
         }

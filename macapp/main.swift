@@ -64,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         case "scan": finder.scan()
         case "add": if let h = m["host"] as? String { finder.add(h) }
         case "identify": if let k = m["key"] as? String { finder.blink(k) }
+        case "forget": if let k = m["key"] as? String { finder.forget(k) }
+        case "copy":
+            if let t = m["text"] as? String { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(t, forType: .string) }
         case "bright": if let k = m["key"] as? String, let p = m["pct"] as? Int { finder.bright(k, part: m["part"] as? String ?? "light", pct: p) }
         default: break
         }
