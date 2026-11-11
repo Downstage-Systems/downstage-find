@@ -22,10 +22,14 @@ struct Device {
     var hasApps = false
     var hasShow = false
     var gone = false
-    var health: [String: Any] = [:]   // a light's own report, worded by the page
+    var health: [String: Any] = [:]   // a light's or a Relay's own report, worded by the page
+    var lastSeen: Date?               // the last time it answered
+    var heard = false                 // Bonjour told us of it this session
+    var answered = false              // its /status answered this session
     var json: [String: Any] {
         ["key": key, "kind": kind, "name": name, "host": host, "port": port, "serial": serial, "version": version,
-         "companion": companion, "ontime": ontime, "hasApps": hasApps, "hasShow": hasShow, "gone": gone, "health": health]
+         "companion": companion, "ontime": ontime, "hasApps": hasApps, "hasShow": hasShow, "gone": gone, "health": health,
+         "lastSeen": lastSeen.map { $0.timeIntervalSince1970 * 1000 } ?? NSNull(), "heard": heard, "answered": answered]
     }
 }
 
@@ -56,7 +60,8 @@ func identify(_ s: [String: Any], host: String, port: Int) -> Device? {
         update(&d, s)
         return d
     }
-    if let fw = s["firmware"] as? String, s["id"] != nil || s["serial"] != nil {
+    // a light says firmware; a Relay since 0.186.4x says version (its one-system /status keys)
+    if let fw = (s["firmware"] ?? s["version"]) as? String, s["id"] != nil || s["serial"] != nil {
         let id = s["id"] as? String ?? s["serial"] as? String ?? host
         let model = (s["model"] as? String ?? "").lowercased()
         let kind = model.contains("relay") ? "relay" : model.contains("lite") ? "lite" : model.contains("mini") ? "mini" : model.contains("360") ? "360" : "cue"
@@ -84,6 +89,13 @@ func lightHealth(_ s: [String: Any]) -> [String: Any] {
     return h
 }
 
+// A Relay's own verdict (2026-11-09, one-system-ui.md): health_ok, and health_why worst first; showing is "3 of 8 linked"
+func relayHealth(_ s: [String: Any]) -> [String: Any] {
+    var h: [String: Any] = [:]
+    for k in ["health_ok", "health_why", "showing"] { if let v = s[k] { h[k] = v } }
+    return h
+}
+
 final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     var browser = NetServiceBrowser()
     var services: [NetService] = []
@@ -96,7 +108,50 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     // heard: Bonjour has answered at least once, so Local Network is allowed. blocked: the warning is up
     var heard = false, blocked = false, retries = 0
 
+    // The Mac remembers each device it has seen, by its key (serial or id): its name, kind and serial and when it
+    // was last seen, nothing about the network it was on. One missing now stays in the list, dimmed, and drops off
+    // 30 days after it was last seen
+    var remembers = false
+    static let keepFor: TimeInterval = 30 * 24 * 3600
+    let store = "rememberedDevices"
+    var savedAt = Date.distantPast
+    func loadRemembered() {
+        guard remembers, let saved = UserDefaults.standard.dictionary(forKey: store) as? [String: [String: Any]] else { return }
+        let now = Date().timeIntervalSince1970
+        for (key, r) in saved where devices[key] == nil {
+            guard let t = r["seen"] as? Double, now - t < Finder.keepFor else { continue }
+            var d = Device(key: key, kind: r["kind"] as? String ?? "cue", name: r["name"] as? String ?? key, host: "", port: 0, serial: r["serial"] as? String ?? "")
+            d.gone = true
+            d.lastSeen = Date(timeIntervalSince1970: t)
+            devices[key] = d
+        }
+    }
+    func saveRemembered() {
+        guard remembers else { return }
+        var out: [String: [String: Any]] = [:]
+        for d in devices.values {
+            guard let t = d.lastSeen, Date().timeIntervalSince(t) < Finder.keepFor else { continue }
+            out[d.key] = ["name": d.name, "kind": d.kind, "serial": d.serial, "seen": t.timeIntervalSince1970]
+        }
+        UserDefaults.standard.set(out, forKey: store)
+        savedAt = Date()
+    }
+    func expire() {
+        // only what was last seen more than 30 days ago: one heard this session but never answering stays
+        devices = devices.filter { !$0.value.gone || ($0.value.lastSeen.map { Date().timeIntervalSince($0) < Finder.keepFor } ?? true) }
+    }
+    var rememberedCount: Int { devices.values.filter { $0.gone && $0.lastSeen != nil }.count }
+    // Settings' Forget All: every device that isn't here now; one that is stays, and is remembered again
+    func forgetAll() {
+        devices = devices.filter { !$0.value.gone }
+        UserDefaults.standard.removeObject(forKey: store)
+        saveRemembered()
+        changed()
+    }
+
     func start() {
+        loadRemembered()
+        changed()
         search()
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.check() }
     }
@@ -109,7 +164,8 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     }
     func refresh() {
         retries = 0
-        devices = devices.filter { !$0.value.gone }
+        // a remembered device stays, dimmed; without remembering (the iPhone) one that's gone drops off
+        if remembers { expire() } else { devices = devices.filter { !$0.value.gone } }
         changed()
         search()
         check()
@@ -142,7 +198,7 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
         let kind = txt["kind"]?.lowercased() ?? (serial.hasPrefix("DS1-") ? "one" : serial.isEmpty ? "cue" : "view")
         let key = txt["id"] ?? (serial.isEmpty ? s.name : serial)
         var d = devices[key] ?? Device(key: key, kind: kind, name: txt["name"] ?? s.name, host: host, port: s.port, serial: serial, version: txt["fw"] ?? "")
-        d.host = host; d.port = s.port; d.gone = false
+        d.host = host; d.port = s.port; d.gone = false; d.heard = true
         devices[key] = d
         changed()
         look(key)
@@ -161,12 +217,14 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     }
     // Keep each card true: is it there, and for a One, which of its apps are running
     func look(_ key: String) {
-        guard let d = devices[key] else { return }
+        guard let d = devices[key], !d.host.isEmpty else { return }   // remembered, not heard of yet here
         getJSON("http://\(d.host):\(d.port)/status", timeout: 3) { [weak self] s in
             guard let self = self, self.devices[key] != nil else { return }
             self.devices[key]!.gone = s == nil
+            if s != nil { self.devices[key]!.answered = true; self.devices[key]!.lastSeen = Date() }
             if let s = s, d.kind == "one" || d.kind == "view" { update(&self.devices[key]!, s) }
-            else if let s = s, d.kind != "relay" { self.devices[key]!.health = lightHealth(s) }
+            else if let s = s, d.kind == "relay" { self.devices[key]!.health = relayHealth(s) }
+            else if let s = s { self.devices[key]!.health = lightHealth(s) }
             self.changed()
         }
         if d.kind == "one" {
@@ -181,7 +239,11 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
             }
         }
     }
-    func check() { devices.keys.forEach(look) }
+    func check() {
+        devices.keys.forEach(look)
+        // gentle on the disk too: the last-seen times are written at most once a minute
+        if remembers && Date().timeIntervalSince(savedAt) > 60 { expire(); saveRemembered() }
+    }
 
     func add(_ host: String) {
         say("Asking \(host)…", false)
@@ -232,6 +294,7 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     // Off the list until it's heard of again: Bonjour or a look brings it back
     func forget(_ key: String) {
         devices.removeValue(forKey: key)
+        saveRemembered()
         changed()
     }
     func probe(_ host: String, ports: [Int], timeout: TimeInterval, done: @escaping (Device?) -> Void) {
@@ -257,7 +320,7 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
             guard let ip = queue.popFirst() else { return }
             probe(ip, ports: [8080, 80], timeout: 0.8) { [weak self] d in
                 guard let self = self else { return }
-                if let d = d { foundCount += 1; if self.devices[d.key] == nil { self.keep(d) } }
+                if let d = d { foundCount += 1; if self.devices[d.key]?.gone ?? true { self.keep(d) } }
                 left -= 1
                 if left == 0 {
                     self.scanState(false)

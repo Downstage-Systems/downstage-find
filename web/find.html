@@ -84,6 +84,11 @@
   #empty b { display: block; margin-bottom: 6px; color: var(--text); font: 700 20px var(--disp); letter-spacing: .02em; }
   #empty p { margin: 0 auto 16px; max-width: 440px; }
   #empty .acts { justify-content: center; }
+  .gh .ghost { height: 22px; padding: 0 4px; border: 0; background: none; color: var(--meta); font-size: 12px; font-weight: 500; }
+  .gh .ghost:hover { color: var(--text); }
+  .pop { position: fixed; z-index: 20; width: 280px; background: #1C2229; border: 1px solid var(--ctl); border-radius: 8px; padding: 12px 14px;
+         box-shadow: 0 14px 34px rgba(0, 0, 0, .5); }
+  .pop .note { margin-top: 10px; }
   .nomatch { padding: 28px 18px; color: var(--meta); text-align: center; }
 
   aside { flex: none; width: 300px; overflow: auto; background: var(--panel); border-left: 1px solid var(--rule); display: none; }
@@ -229,17 +234,33 @@
     if (!warn) short = 'Live' + (typeof h.battery === 'number' ? ' · ' + h.battery + '%' : '');
     return { warn, text: [text].concat(more).join(' · '), short };
   }
+  // A Relay's own verdict (health_ok, health_why worst first, joined by " · "), worded like a light's line
+  function relayOf(d) {
+    const h = d.health || {};
+    if (typeof h.health_ok !== 'boolean') return null;   // a Relay from before 0.186.45
+    const linked = h.showing ? ' · ' + h.showing : '';
+    if (h.health_ok) return { cls: 'ok', short: 'Live', text: 'Live on Companion' + linked };
+    const why = String(h.health_why || 'Needs a look');
+    return { cls: 'warn', short: why.split(' · ')[0], text: why + linked };
+  }
   // The one pill a row shows: green when it's fine, amber when it needs a look, grey when it isn't answering
   function statusOf(d) {
-    if (d.gone) return { cls: 'off', short: 'Not seen', text: 'Not answering. It may be unplugged, or off this network.' };
+    if (d.gone) return { cls: 'off', short: 'Not seen', text: (d.lastSeen ? 'Last seen ' + ago(d.lastSeen) + '. ' : 'Not answering. ') + 'It may be unplugged, or off this network.' };
+    const r = d.kind === 'relay' ? relayOf(d) : null;
+    if (r) return r;
     const h = isLight(d) ? healthOf(d) : null;
     if (h) return { cls: h.warn ? 'warn' : 'ok', short: h.short, text: h.text };
     return { cls: 'ok', short: 'Online', text: 'On the network' };
   }
   function subOf(d) {
     const h = d.health || {};
+    if (d.gone && d.lastSeen) return kindOf(d)[0] + ' · last seen ' + ago(d.lastSeen);
     if (isLight(d) && h.relayed && !d.gone) { const o = list.find(x => x.key === h.via); return kindOf(d)[0] + ' · linked to ' + (o ? o.name : 'its Relay'); }
     return kindOf(d)[0] + ' · ' + d.host;
+  }
+  function ago(ms) {
+    const s = Math.max(0, (Date.now() - ms) / 1000), m = Math.round(s / 60), h = Math.round(s / 3600), d = Math.round(s / 86400);
+    return s < 60 ? 'just now' : m < 60 ? m + ' min ago' : h < 24 ? h + (h === 1 ? ' hour ago' : ' hours ago') : d + (d === 1 ? ' day ago' : ' days ago');
   }
   const signalWord = rssi => rssi >= -60 ? 'good signal' : rssi >= -72 ? 'fair signal' : 'weak signal';
 
@@ -264,7 +285,7 @@
   const matches = (d, q) => !q || [d.name, kindOf(d)[0], d.host, d.serial, d.key].some(v => String(v || '').toLowerCase().includes(q));
   function shown() {
     const q = $('q').value.trim().toLowerCase();
-    return list.filter(d => matches(d, q)).sort((a, b) => (groupOf(a) - groupOf(b)) || (a.gone - b.gone) ||
+    return list.filter(d => matches(d, q)).sort((a, b) => (groupOf(a) - groupOf(b)) || (!!a.gone - !!b.gone) ||
       String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
   }
   function blinkBtn(d, cls) {
@@ -282,7 +303,8 @@
   }
   function detail(d) {
     const k = kindOf(d), s = statusOf(d), h = d.health || {};
-    const kv = [['Address', '<code>' + esc(d.host) + (d.port && d.port !== 80 ? ':' + d.port : '') + '</code>']];
+    const kv = d.host ? [['Address', '<code>' + esc(d.host) + (d.port && d.port !== 80 ? ':' + d.port : '') + '</code>']] : [];
+    if (d.gone && d.lastSeen) kv.push(['Last seen', esc(ago(d.lastSeen))]);
     if (d.serial || isLight(d) || d.kind === 'relay') kv.push(['Serial', '<code>' + esc(d.serial || d.key) + '</code>']);
     if (isLight(d) && !d.gone) {
       if (h.relayed) { const o = list.find(x => x.key === h.via); kv.push(['Network', 'Linked to ' + esc(o ? o.name : 'its Relay') + ' over CueLink']); }
@@ -290,6 +312,7 @@
       const cw = companionWord(String(h.companion || ''));
       if (cw && !h.relayed) kv.push(['Companion', esc(cw)]);
     }
+    if (d.kind === 'relay' && !d.gone && h.showing) kv.push(['Lights', esc(h.showing)]);
     if (d.kind === 'one' && !d.gone) {
       kv.push(['Companion', d.companion ? 'Running' : 'Not running']);
       kv.push(['OnTime', d.ontime ? 'Running' : 'Not running']);
@@ -317,7 +340,8 @@
     let html = '';
     for (const [gi, [title]] of GROUPS.entries()) {
       const g = all.filter(d => groupOf(d) === gi);
-      if (g.length) html += '<div class="gh">' + title + '</div>' + g.map(row).join('');
+      const extra = title === 'Lights' && allLights().length >= 2 ? '<button class="ghost" data-allbright title="One slider for every light">Brightness for all ▾</button>' : '';
+      if (g.length) html += '<div class="gh">' + title + extra + '</div>' + g.map(row).join('');
     }
     if (list.length && !all.length) html = '<div class="nomatch">No device matches “' + esc($('q').value.trim()) + '”.</div>';
     $('rows').innerHTML = html;
@@ -331,11 +355,11 @@
     tellState({ selected: !!sel, detail: !!sel && !detailHidden, scanning });
     // Nothing is answering at all: on a Mac that is most often Local Network turned off for Find, which blocks every
     // connection while Bonjour still lists the devices (Rob's bench, 2026-11-05)
-    if (list.length && list.every(d => d.gone) && Date.now() - started > 8000 && !$('say').textContent) {
+    if (list.some(d => d.heard) && !list.some(d => d.answered) && Date.now() - started > 8000 && !$('say').textContent) {
       window.findSay('Nothing is answering. ' + (window.downstageMobile ? 'In Settings, open Downstage Find and check Local Network is on.'
         : 'In System Settings, open Privacy & Security, then Local Network, and check Downstage Find is on.'), true);
       allQuiet = true;
-    } else if (allQuiet && list.some(d => !d.gone)) { allQuiet = false; window.findSay(''); }
+    } else if (allQuiet && list.some(d => d.answered)) { allQuiet = false; window.findSay(''); }
     const none = !list.length;
     $('empty').style.display = none ? '' : 'none';
     if (none) {
@@ -398,7 +422,39 @@
   function lookAgain() { started = Date.now(); allQuiet = false; window.findSay(''); native('refresh'); draw(); }
 
   // ── menus and sheets ──
-  function closeMenus() { document.querySelectorAll('.menu').forEach(m => m.remove()); }
+  function closeMenus() { document.querySelectorAll('.menu, .pop').forEach(m => m.remove()); }
+
+  // Brightness for all: one slider for every light here that has one. A light with a Cue PIN is skipped and counted;
+  // each light gets one write, when the slider is let go, as with its own slider
+  const allLights = () => list.filter(d => isLight(d) && !d.gone && d.health && typeof d.health.brightpct === 'number');
+  function allBright(x, y) {
+    closeMenus();
+    const ls = allLights(), open = ls.filter(d => !d.health.tokenSet), pinned = ls.length - open.length;
+    const start = open.length ? Math.round(open.reduce((n, d) => n + d.health.brightpct, 0) / open.length) : 50;
+    const p = document.createElement('div');
+    p.className = 'pop';
+    p.innerHTML = '<label class="sl"><span>All lights</span><input type="range" min="1" max="100" step="1" value="' + start + '"' + (open.length ? '' : ' disabled') + '><b>' + start + '%</b></label>' +
+      '<div class="note">' + (open.length ? 'Sets ' + open.length + (open.length === 1 ? ' light' : ' lights') + ' when you let go.' : 'Every light here has a Cue PIN.') +
+      (pinned ? ' ' + pinned + ' with a Cue PIN ' + (pinned === 1 ? 'is' : 'are') + ' skipped: change ' + (pinned === 1 ? 'it' : 'those') + ' in Settings.' : '') + '</div>';
+    document.body.appendChild(p);
+    p.style.left = Math.max(6, Math.min(x - p.offsetWidth, innerWidth - p.offsetWidth - 6)) + 'px';
+    p.style.top = Math.max(6, Math.min(y, innerHeight - p.offsetHeight - 6)) + 'px';
+    const r = p.querySelector('input');
+    p.addEventListener('click', e => e.stopPropagation());
+    r.addEventListener('input', () => { r.nextElementSibling.textContent = r.value + '%'; });
+    r.addEventListener('change', () => {
+      const pct = Math.max(1, Math.min(100, Math.round(+r.value)));
+      for (const d of open) {
+        held[d.key + ':light'] = { pct, until: Date.now() + 5000 };
+        native('bright', { key: d.key, part: 'light', pct });
+      }
+      window.findSay('Brightness ' + pct + '% sent to ' + open.length + (open.length === 1 ? ' light' : ' lights') +
+        (pinned ? '. Skipped ' + pinned + ' with a Cue PIN.' : '.'), false);
+      clearTimeout(allBright.t);
+      allBright.t = setTimeout(() => { if (/^Brightness /.test($('say').textContent)) window.findSay(''); }, 6000);
+      draw();
+    });
+  }
   function menu(x, y, items) {
     closeMenus();
     const m = document.createElement('div');
@@ -478,6 +534,7 @@
     if (t && 'add' in t.dataset) return addByAddress();
     if (t && 'scan' in t.dataset) return scanNetwork();
     if (t && 'back' in t.dataset) { selKey = null; return draw(); }
+    if (t && 'allbright' in t.dataset) { const b = t.getBoundingClientRect(); e.stopPropagation(); return allBright(b.right, b.bottom + 4); }
     const r = e.target.closest('.dv');
     if (r && !t) select(r.dataset.key);
   });
@@ -488,9 +545,9 @@
     const d = list.find(x => x.key === r.dataset.key);
     if (!d) return;
     select(d.key);
-    const items = [['Copy address', () => copy(d.host)]];
+    const items = d.host ? [['Copy address', () => copy(d.host)]] : [];
     if (d.serial) items.push(['Copy serial', () => copy(d.serial)]);
-    items.push(['Open in browser', () => open(settingsOf(d)), d.gone]);
+    items.push(['Open in browser', () => open(settingsOf(d)), d.gone || !d.host]);
     if (canBlink(d)) items.push(['Blink', () => blink(d.key), d.gone || !!blinking[d.key]]);
     items.push('-', ['Forget', () => forget(d.key)]);
     menu(e.clientX, e.clientY, items);
@@ -567,6 +624,7 @@
   tellDragZone();
   if (document.fonts) document.fonts.ready.then(tellDragZone);
   setTimeout(draw, 8100);
+  setInterval(() => { if (!sliding && list.some(d => d.gone && d.lastSeen)) draw(); }, 30000);
   draw();
 </script>
 </body>

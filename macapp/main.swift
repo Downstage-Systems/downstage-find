@@ -79,6 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         finder.changed = { [weak self] in self?.tell() }
         finder.say = { [weak self] text, warn in self?.call("window.findSay(\(self?.quoted(text) ?? "''"), \(warn))") }
         finder.scanState = { [weak self] running in self?.call("window.scanState(\(running))") }
+        finder.remembers = true
+        settings.finder = finder
         finder.start()
         #if UPDATE_TEST
         if let h = ProcessInfo.processInfo.environment["DOWNSTAGE_TEST_ADD"] { finder.add(h) }
@@ -269,36 +271,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 }
 
 // Find's own Settings (⌘,): a small native window. It holds the switches for remembered devices, the menu bar and
-// alerts as they arrive (steps 3 and 4 of the 2026-11-10 brief), and nothing else.
+// alerts (steps 3 and 4 of the 2026-11-10 brief), and nothing else.
 final class SettingsWindow: NSObject, NSWindowDelegate {
     var window: NSWindow?
+    weak var finder: Finder?
+    let forgetButton = NSButton(title: "Forget All…", target: nil, action: nil)
+    let countLabel = NSTextField(labelWithString: "")
     func show() {
         if window == nil { build() }
-        window?.center()
+        refresh()
+        if window?.isVisible == false { window?.center() }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+    func refresh() {
+        let n = finder?.rememberedCount ?? 0
+        countLabel.stringValue = n == 0 ? "No devices are remembered that aren't here now." : (n == 1 ? "1 remembered device isn't here now." : "\(n) remembered devices aren't here now.")
+        forgetButton.isEnabled = n > 0
+    }
+    func windowDidBecomeKey(_ n: Notification) { refresh() }
+    func label(_ t: String, _ size: CGFloat = 12, _ weight: NSFont.Weight = .regular, dim: Bool = false) -> NSTextField {
+        let l = NSTextField(wrappingLabelWithString: t)
+        l.font = NSFont.systemFont(ofSize: size, weight: weight)
+        l.textColor = dim ? .secondaryLabelColor : .labelColor
+        l.preferredMaxLayoutWidth = 412
+        return l
+    }
     func build() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 160), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 190), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         w.title = "Settings"
         w.isReleasedWhenClosed = false
         w.backgroundColor = NSColor(srgbRed: 0x12 / 255.0, green: 0x16 / 255.0, blue: 0x1B / 255.0, alpha: 1)
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
+        stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 22, right: 24)
-        let head = NSTextField(labelWithString: "Downstage Find")
-        head.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        let body = NSTextField(wrappingLabelWithString: "Nothing to set yet. Remembered devices, the menu bar and alerts are switched on and off here.")
-        body.font = NSFont.systemFont(ofSize: 12)
-        body.textColor = .secondaryLabelColor
-        body.preferredMaxLayoutWidth = 392
-        stack.addArrangedSubview(head)
-        stack.addArrangedSubview(body)
+        stack.addArrangedSubview(label("Remembered devices", 13, .semibold))
+        stack.addArrangedSubview(label("A device this Mac has seen stays in the list, dimmed, while it's away, and drops off 30 days after it was last seen. Only its name, kind and serial are kept, nothing about the network.", dim: true))
+        countLabel.font = NSFont.systemFont(ofSize: 12)
+        forgetButton.target = self
+        forgetButton.action = #selector(forgetAll)
+        forgetButton.bezelStyle = .rounded
+        let row = NSStackView(views: [countLabel, forgetButton])
+        row.orientation = .horizontal
+        row.spacing = 12
+        stack.setCustomSpacing(14, after: stack.arrangedSubviews.last!)
+        stack.addArrangedSubview(row)
         w.contentView = stack
         w.delegate = self
         window = w
+    }
+    // a sheet on the Settings window: how many, and that it can't be undone
+    @objc func forgetAll() {
+        guard let w = window, let f = finder else { return }
+        let n = f.rememberedCount
+        let a = NSAlert()
+        a.messageText = n == 1 ? "Forget 1 device?" : "Forget \(n) devices?"
+        a.informativeText = "Devices that aren't here now come off the list. Any that come back are found again as new."
+        a.addButton(withTitle: "Forget All")
+        a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: w) { r in
+            if r == .alertFirstButtonReturn { f.forgetAll(); self.refresh() }
+        }
     }
 }
 
