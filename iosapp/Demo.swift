@@ -5,6 +5,10 @@ import Foundation
 
 enum Demo {
     static func devices(now: Date = Date()) -> [Device] {
+        #if DEBUG
+        // DOWNSTAGE_DEMO=empty: a demo network with nothing Downstage on it, for the empty states and "found nothing"
+        if ProcessInfo.processInfo.environment["DOWNSTAGE_DEMO"] == "empty" { return [] }
+        #endif
         var out: [Device] = []
         func add(_ d: Device, _ health: [String: Any] = [:], seen: TimeInterval = 0) {
             var d = d

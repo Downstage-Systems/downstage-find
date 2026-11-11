@@ -50,7 +50,7 @@ final class FindModel: ObservableObject {
         guard !running else { return }
         running = true
         #if DEBUG
-        demo = env["DOWNSTAGE_DEMO"] == "1" || UserDefaults.standard.bool(forKey: "demo")
+        demo = env["DOWNSTAGE_DEMO"] == "1" || env["DOWNSTAGE_DEMO"] == "empty" || UserDefaults.standard.bool(forKey: "demo")
         if forced != nil { return }
         #endif
         // a phone on cellular only isn't on the show's network; Wi-Fi or a wired adapter is
@@ -68,6 +68,12 @@ final class FindModel: ObservableObject {
         if demo { devices = Demo.devices() } else { startFinder() }
         #if DEBUG
         if let k = env["DOWNSTAGE_OPEN"] { if split { selected = k } else { path = [k] } }
+        // DOWNSTAGE_FORGET=<key> takes a device off first; DOWNSTAGE_SCAN=<seconds> scans that long after launch, once
+        // Bonjour has listed what it can (1 means 6 s)
+        if let k = env["DOWNSTAGE_FORGET"], let d = devices.first(where: { $0.key == k }) { forget(d) }
+        if let v = env["DOWNSTAGE_SCAN"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (v == 1 ? 6 : v)) { [weak self] in self?.scan() }
+        }
         if let k = env["DOWNSTAGE_BROWSE"], let d = devices.first(where: { $0.key == k }), let w = waysOf(d).first { open(w, of: d) }
         #endif
     }
@@ -86,6 +92,7 @@ final class FindModel: ObservableObject {
             self.blocked = f.blocked
         }
         f.scanState = { [weak self] on in self?.scanning = on }
+        f.log = { testLog($0) }
         // remembered like the Mac: name, kind, serial and last seen only, 30 days, nothing about the network
         f.remembers = true
         finder = f
@@ -230,13 +237,24 @@ extension FindModel {
         tapFeel()
         testLog("scan demo=\(demo)")
         guard demo else { finder?.scan(); return }
+        // the made-up devices answer a made-up sweep of 192.168.1.1 to 254, a made-up device here or forgotten alike,
+        // and the same check as a real scan: every device the list shows as answering must answer it
         scanning = true
         note = Note(text: "Scanning 254 addresses…", warn: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self = self, self.demo else { return }
-            self.devices += Demo.devices().filter { d in !self.devices.contains { $0.key == d.key } }
+            let here = Demo.devices().filter { !$0.gone && !$0.host.isEmpty }
+            let answered = (1...254).compactMap { i in here.first { $0.host == "192.168.1.\(i)" } }
+            let back = answered.filter { d in !self.devices.contains { $0.key == d.key && !$0.gone } }
+            self.devices.removeAll { d in back.contains { $0.key == d.key } }
+            self.devices += back
+            let listed = self.devices.filter { !$0.gone }
+            let missed = listed.filter { d in !answered.contains { $0.key == d.key } }.map { $0.name }
+            testLog("scan done answered=\(answered.count) new=\(back.count) listed=\(listed.count) demo=true")
+            testLog(missed.isEmpty ? "scan check ok: every listed device answered" : "scan check MISSED \(missed)")
             self.scanning = false
-            self.note = nil
+            let w = scanWords(answered: answered.count, fresh: back.count, listed: listed.count, nets: ["192.168.1"])
+            self.note = Note(text: w.text, warn: w.warn)
         }
     }
     // the lights Brightness for all reaches: here, with a brightness of their own

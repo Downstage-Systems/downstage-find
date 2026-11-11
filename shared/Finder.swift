@@ -33,6 +33,16 @@ struct Device {
     }
 }
 
+// What a finished scan says (Rob, 2026-11-11: "it just didn't find any new devices"): a warning only when nothing
+// Downstage is here at all; otherwise a quiet line with what was new. Always which networks it looked at, so a scan of
+// the wrong one shows
+func scanWords(answered: Int, fresh: Int, listed: Int, nets: [String]) -> (text: String, warn: Bool) {
+    let looked = "Looked at " + nets.map { "\($0).1 to 254" }.joined(separator: " and ") + "."
+    if answered == 0 && listed == 0 { return ("The scan found nothing Downstage on this network. " + looked, true) }
+    if fresh > 0 { return ("Scan finished: \(fresh) new " + (fresh == 1 ? "device" : "devices") + ". " + looked, false) }
+    return ("Scan finished: nothing new. \(listed) " + (listed == 1 ? "device" : "devices") + " already listed. " + looked, false)
+}
+
 func getJSON(_ url: String, timeout: TimeInterval, done: @escaping ([String: Any]?) -> Void) {
     guard let u = URL(string: url) else { return done(nil) }
     var r = URLRequest(url: u); r.timeoutInterval = timeout
@@ -103,10 +113,13 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     var changed: () -> Void = {}
     var say: (String, Bool) -> Void = { _, _ in }
     var scanState: (Bool) -> Void = { _ in }
+    var log: (String) -> Void = { _ in }    // test runs only: one line per scan step (the iOS Debug build writes them)
     var timer: Timer?
 
     // heard: Bonjour has answered at least once, so Local Network is allowed. blocked: the warning is up
     var heard = false, blocked = false, retries = 0
+    // the scan's "found nothing" warning is up: the first device to answer after it takes it down, as it is no longer true
+    var scanWarned = false
 
     // The Mac remembers each device it has seen, by its key (serial or id): its name, kind and serial and when it
     // was last seen, nothing about the network it was on. One missing now stays in the list, dimmed, and drops off
@@ -222,6 +235,7 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
             guard let self = self, self.devices[key] != nil else { return }
             self.devices[key]!.gone = s == nil
             if s != nil { self.devices[key]!.answered = true; self.devices[key]!.lastSeen = Date() }
+            if s != nil && self.scanWarned { self.scanWarned = false; self.say("", false) }
             if let s = s, d.kind == "one" || d.kind == "view" { update(&self.devices[key]!, s) }
             else if let s = s, d.kind == "relay" { self.devices[key]!.health = relayHealth(s) }
             else if let s = s { self.devices[key]!.health = lightHealth(s) }
@@ -309,26 +323,78 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
         changed()
         look(d.key)
     }
-    // Only when asked: every address on each network this machine is on, a few at a time
+    // One address on one port, for the scan: the answer, and in a word why there was none
+    func scanProbe(_ host: String, port: Int, timeout: TimeInterval, done: @escaping (Device?, String) -> Void) {
+        guard let u = URL(string: "http://\(host):\(port)/status") else { return done(nil, "badurl") }
+        var r = URLRequest(url: u); r.timeoutInterval = timeout
+        URLSession.shared.dataTask(with: r) { data, resp, err in
+            let code = (resp as? HTTPURLResponse)?.statusCode
+            let obj = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let e = err as NSError?
+            let d = code == 200 ? obj.flatMap { identify($0, host: host, port: port) } : nil
+            let why = d != nil ? "ok" : e?.code == NSURLErrorTimedOut ? "timeout" : e?.code == NSURLErrorCannotConnectToHost ? "refused"
+                : e != nil ? "err\(e!.code)" : code != 200 ? "http\(code ?? 0)" : obj == nil ? "notjson" : "notours"
+            DispatchQueue.main.async { done(d, why) }
+        }.resume()
+    }
+    // Only when asked: every address on each network this machine is on, and on each network a device in the list is
+    // on. A venue often puts its gear on its own subnet with Bonjour carried across by the router: Rob's bench has this
+    // Mac and iPhone on 192.168.1.x and the One and Relay on 192.168.10.x (2026-11-11), so a scan of this machine's own
+    // /24 alone found nothing while both were listed
     func scan() {
-        let ips = localNets().flatMap { n in (1...254).map { "\(n).\($0)" } }
+        let own = localNets()
+        let theirs = devices.values.compactMap { d -> String? in
+            let p = d.host.split(separator: ".")
+            return p.count == 4 && p.allSatisfy({ Int($0) != nil }) ? p.prefix(3).joined(separator: ".") : nil
+        }
+        var nets: [String] = []
+        for n in own + theirs.sorted() where !nets.contains(n) { nets.append(n) }
+        let ips = nets.flatMap { n in (1...254).map { "\(n).\($0)" } }
         guard !ips.isEmpty else { return say(notOnNetwork, true) }
+        let t0 = Date()
+        let known = Dictionary(devices.values.filter { !$0.gone && !$0.host.isEmpty }.map { ($0.host, $0.name) }, uniquingKeysWith: { a, _ in a })
+        log("scan start own=\(own) nets=\(nets) addresses=\(ips.count) known=\(known)")
         scanState(true)
         say("Scanning \(ips.count) addresses…", false)
-        var queue = ips[...], left = ips.count, foundCount = 0
+        var queue = ips[...], left = ips.count, answered = Set<String>(), fresh = 0, whys: [String: Int] = [:]
         func next() {
             guard let ip = queue.popFirst() else { return }
-            probe(ip, ports: [8080, 80], timeout: 0.8) { [weak self] d in
-                guard let self = self else { return }
-                if let d = d { foundCount += 1; if self.devices[d.key]?.gone ?? true { self.keep(d) } }
+            var tried: [String] = []
+            func port(_ ports: [Int]) {
+                guard let p = ports.first else {
+                    if let n = known[ip] { self.log("scan MISSED \(n) at \(ip): \(tried.joined(separator: ", "))") }
+                    return finished(nil)
+                }
+                let started = Date()
+                scanProbe(ip, port: p, timeout: 1.2) { d, why in
+                    tried.append("\(p) \(why) \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+                    whys[why, default: 0] += 1
+                    if let d = d { self.log("scan answer \(ip):\(p) \(d.kind) \(d.name) \(tried.last!)"); finished(d) }
+                    // nothing there at all: the other port won't answer either (a device refuses a wrong port at once)
+                    else if why == "timeout" { port([]) }
+                    else { port(Array(ports.dropFirst())) }
+                }
+            }
+            func finished(_ d: Device?) {
+                if let d = d {
+                    answered.insert(d.key)
+                    if self.devices[d.key]?.gone ?? true { fresh += 1; self.keep(d) }
+                }
                 left -= 1
                 if left == 0 {
+                    let listed = self.devices.values.filter { !$0.gone }
+                    let missed = listed.filter { !answered.contains($0.key) && !$0.host.isEmpty }.map { $0.name }
+                    self.log("scan done answered=\(answered.count) new=\(fresh) listed=\(listed.count) secs=\(String(format: "%.1f", Date().timeIntervalSince(t0))) whys=\(whys)")
+                    self.log(missed.isEmpty ? "scan check ok: every listed device answered" : "scan check MISSED \(missed)")
                     self.scanState(false)
-                    self.say(foundCount == 0 ? "The scan found nothing Downstage on this network." : "", foundCount == 0)
+                    let w = scanWords(answered: answered.count, fresh: fresh, listed: listed.count, nets: nets)
+                    self.scanWarned = w.warn
+                    self.say(w.text, w.warn)
                 } else { next() }
             }
+            port([8080, 80])
         }
-        for _ in 0..<12 { next() }
+        for _ in 0..<32 { next() }
     }
     func localNets() -> [String] {
         var out: [String] = [], head: UnsafeMutablePointer<ifaddrs>?

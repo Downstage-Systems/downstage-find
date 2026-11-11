@@ -487,7 +487,7 @@
   }
   function scanNetwork() {
     if (scanning) return;
-    sheet('Scan this network?', 'This knocks on every address on your network. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn’t your network.',
+    sheet('Scan this network?', 'This knocks on every address on this network, and on the network of each device in the list. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn’t your network.',
       'Scan', null, () => native('scan'));
   }
   // the Mac app's menus run the page's own commands

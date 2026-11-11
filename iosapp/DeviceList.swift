@@ -197,7 +197,7 @@ struct DeviceList: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Scan") { model.scan() }
             } message: {
-                Text("This knocks on every address on your network. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn't your network.")
+                Text("This knocks on every address on this network, and on the network of each device in the list. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn't your network.")
             }
             .sheet(isPresented: $allBright) { AllBrightSheet() }
             .onAppear { if query.isEmpty { query = model.startSearch } }
