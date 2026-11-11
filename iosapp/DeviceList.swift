@@ -234,7 +234,11 @@ struct DeviceList: View {
                         ForEach(rows) { d in
                             NavigationLink(value: d.key) { DeviceRow(device: d, all: all, now: model.now) }
                                 .tag(d.key)
-                                .listRowBackground(split && model.selected == d.key ? Theme.raised : Theme.panel)
+                                .listRowBackground(
+                                    split && model.selected == d.key
+                                        ? AnyView(ZStack { Theme.panel; RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.raised).padding(3) })
+                                        : AnyView(Theme.panel))
+                                .modifier(NoFocusRing())
                                 .contextMenu { DeviceMenu(device: d) }
                                 // swipe left: Settings for a device that's here, Forget for one that isn't
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -347,6 +351,14 @@ struct DeviceList: View {
     }
 }
 
+// The iPad's sidebar draws a tinted square ring on the chosen row when it has keyboard focus (iOS 17 and later);
+// the Raised fill already says which one is chosen
+struct NoFocusRing: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) { content.focusEffectDisabled() } else { content }
+    }
+}
+
 // On the iPhone the list pushes a device's screen; on the iPad the detail column does that instead
 struct Destination: ViewModifier {
     let on: Bool
@@ -363,10 +375,12 @@ struct AllBrightSheet: View {
     @State private var value: Double = 50
     @State private var editing = false
     @State private var started = false
+    @State private var tall: CGFloat = 200          // the sheet's own contents, measured, so its height fits them
 
     var body: some View {
         let ls = model.allLights, open = ls.filter { !(brightOf($0).first?.locked ?? false) }, pinned = ls.count - open.count
         NavigationStack {
+            ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text("All lights").foregroundColor(open.isEmpty ? Theme.meta : Theme.text)
@@ -393,15 +407,19 @@ struct AllBrightSheet: View {
                     Label(n.text, systemImage: "checkmark.circle").font(.footnote).foregroundColor(Color(hex: 0x74E8A8))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 0)
             }
             .padding(20)
+            .background(GeometryReader { g in Color.clear.preference(key: TallKey.self, value: g.size.height) })
+            }
+            .onPreferenceChange(TallKey.self) { h in if h > 0 { tall = h } }
             .background(Theme.ground.ignoresSafeArea())
             .navigationTitle("Brightness for all")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
-        .presentationDetents([.medium, .large])
+        // the measured contents plus the bar and grabber: two sentences wrap to as many lines as they need, at any
+        // text size, and the sheet grows with them (the note after a send adds a line)
+        .presentationDetents([.height(tall + 72)])
         .presentationDragIndicator(.visible)
         .onAppear {
             // starts at the lights' average, like the Mac
@@ -411,4 +429,9 @@ struct AllBrightSheet: View {
             value = ps.isEmpty ? 50 : Double(Int((Double(ps.reduce(0, +)) / Double(ps.count)).rounded()))
         }
     }
+}
+
+struct TallKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
