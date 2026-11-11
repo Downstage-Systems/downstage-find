@@ -52,14 +52,49 @@ struct FindApp: App {
 struct RootView: View {
     @EnvironmentObject private var model: FindModel
     var body: some View {
-        NavigationStack(path: $model.path) {
-            DeviceList()
+        Group {
+            if split {
+                // iPad: the list on the left, the device on the right; NavigationSplitView folds itself into one
+                // column in a narrow window
+                NavigationSplitView {
+                    DeviceList(split: true)
+                        .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 460)
+                } detail: {
+                    NavigationStack(path: $model.path) {
+                        Group {
+                            if let k = model.selected { DeviceScreen(key: k).id(k) }
+                            else { ChooseDevice() }
+                        }
+                        .navigationDestination(for: String.self) { key in DeviceScreen(key: key) }
+                    }
+                }
+                .navigationSplitViewStyle(.balanced)
+                .onChange(of: model.selected) { _ in model.path = [] }
+            } else {
+                NavigationStack(path: $model.path) {
+                    DeviceList()
+                }
+            }
         }
         .background(Theme.ground.ignoresSafeArea())
         // a device's page opens over the app, and Done comes back to it
         .sheet(item: $model.browsing) { b in
             if b.demo { DemoPage(browse: b) } else { SafariView(url: b.url).ignoresSafeArea() }
         }
+    }
+}
+
+// The iPad's detail column before a device is chosen
+struct ChooseDevice: View {
+    @EnvironmentObject private var model: FindModel
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "sidebar.left").font(.largeTitle).foregroundColor(Theme.meta).accessibilityHidden(true)
+            Text(model.devices.isEmpty ? "Your devices appear on the left." : "Choose a device.")
+                .font(.title3.weight(.semibold)).foregroundColor(Theme.dim)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.ground.ignoresSafeArea())
     }
 }
 

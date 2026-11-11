@@ -124,6 +124,8 @@ struct DeviceScreen: View {
                     .buttonStyle(GreenButton())
                 }
             }
+            .frame(maxWidth: 560)                 // the iPad's wide detail column keeps a button, not a bar
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 6)
@@ -212,6 +214,7 @@ struct DeviceMenu: View {
         if !d.serial.isEmpty { Button { model.copy(d.serial, "Serial") } label: { Label("Copy serial", systemImage: "number") } }
         Divider()
         Button(role: .destructive) { model.forget(d) } label: { Label("Forget this device", systemImage: "trash") }
+            .tint(.red)
     }
 }
 
@@ -252,7 +255,7 @@ struct DemoPage: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "safari").font(.largeTitle).foregroundColor(Theme.dim)
+            Image(systemName: "safari").font(.largeTitle).foregroundColor(Theme.dim).accessibilityHidden(true)
             Text(browse.device + " · " + browse.title).font(.title3.weight(.semibold)).foregroundColor(Theme.text)
             Text("These are demo devices. On a real network, a device's \(browse.title) page opens here, inside the app.")
                 .font(.subheadline).foregroundColor(Theme.dim).multilineTextAlignment(.center)
