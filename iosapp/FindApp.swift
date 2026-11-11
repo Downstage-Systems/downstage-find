@@ -50,10 +50,25 @@ struct FindApp: App {
 }
 
 struct RootView: View {
+    @EnvironmentObject private var model: FindModel
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $model.path) {
             DeviceList()
         }
         .background(Theme.ground.ignoresSafeArea())
+        // a device's page opens over the app, and Done comes back to it
+        .sheet(item: $model.browsing) { b in
+            if b.demo { DemoPage(browse: b) } else { SafariView(url: b.url).ignoresSafeArea() }
+        }
+    }
+}
+
+// The one filled green button a screen has: Run Green, dark text, 50 pt or more
+struct GreenButton: ButtonStyle {
+    func makeBody(configuration c: Configuration) -> some View {
+        c.label
+            .foregroundColor(Theme.onGreen)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.green.opacity(c.isPressed ? 0.8 : 1)))
+            .contentShape(Rectangle())
     }
 }

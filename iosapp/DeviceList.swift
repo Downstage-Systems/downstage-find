@@ -95,22 +95,24 @@ struct StateView: View {
             switch state {
             case .looking:
                 ProgressView().tint(Theme.dim).padding(.bottom, 4)
-                Text("Looking…").font(.name(24, .title2)).foregroundColor(Theme.text)
+                Text("Looking…").font(.title3.weight(.semibold)).foregroundColor(Theme.text)
                 Text("Asking the network for Downstage devices.").foregroundColor(Theme.dim)
             case .nothing:
-                Text("Nothing found yet").font(.name(24, .title2)).foregroundColor(Theme.text)
+                Text("Nothing found yet").font(.title3.weight(.semibold)).foregroundColor(Theme.text)
                 Text("Check this \(thisDevice) is on the same Wi-Fi as your devices. Some networks hide devices from each other.")
                     .foregroundColor(Theme.dim)
             case .blocked:
                 Image(systemName: "network.slash").font(.title).foregroundColor(Color(hex: 0xF7C066)).padding(.bottom, 2)
-                Text("Local Network is off").font(.name(24, .title2)).foregroundColor(Theme.text)
+                Text("Local Network is off").font(.title3.weight(.semibold)).foregroundColor(Theme.text)
                 Text("Downstage Find needs Local Network to see your devices. Turn it on in Settings.").foregroundColor(Theme.dim)
-                Button { openAppSettings() } label: { Text("Open \(thisDevice) Settings").frame(minHeight: 44) }
-                    .buttonStyle(.bordered)
-                    .padding(.top, 4)
+                Button { tapFeel(); openAppSettings() } label: {
+                    Text("Open \(thisDevice) Settings").font(.body.weight(.semibold)).frame(maxWidth: 320, minHeight: 50)
+                }
+                .buttonStyle(GreenButton())
+                .padding(.top, 8)
             case .noWiFi:
                 Image(systemName: "wifi.slash").font(.title).foregroundColor(Theme.dim).padding(.bottom, 2)
-                Text("Not on Wi-Fi").font(.name(24, .title2)).foregroundColor(Theme.text)
+                Text("Not on Wi-Fi").font(.title3.weight(.semibold)).foregroundColor(Theme.text)
                 Text("Join the show's Wi-Fi on this \(thisDevice) to find your devices.").foregroundColor(Theme.dim)
             case .list:
                 EmptyView()
@@ -159,6 +161,16 @@ struct DeviceList: View {
                             ForEach(rows) { d in
                                 NavigationLink(value: d.key) { DeviceRow(device: d, all: all, now: model.now) }
                                     .listRowBackground(Theme.panel)
+                                    .contextMenu { DeviceMenu(device: d) }
+                                    // swipe left: Settings for a device that's here, Forget for one that isn't
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        if d.gone {
+                                            Button(role: .destructive) { model.forget(d) } label: { Label("Forget", systemImage: "trash") }
+                                        } else if let w = waysOf(d).first {
+                                            Button { model.open(w, of: d) } label: { Label("Settings", systemImage: "gearshape") }
+                                                .tint(Theme.green)
+                                        }
+                                    }
                             }
                         } header: {
                             Text(groups[gi].title).font(.footnote.weight(.semibold)).foregroundColor(Theme.dim).textCase(nil)
@@ -179,6 +191,7 @@ struct DeviceList: View {
         .refreshable { await model.lookAgain() }
         .navigationDestination(for: String.self) { key in DeviceScreen(key: key) }
         .onAppear { if query.isEmpty { query = model.startSearch } }
+        .overlay(alignment: .bottom) { Toast() }
     }
 
     // A word from the finder (a typed address being asked, a scan), and Local Network when devices are listed but
@@ -231,29 +244,5 @@ struct DeviceList: View {
             tapFeel()
             model.setDemo(!model.demo)
         }
-    }
-}
-
-// The device's own screen comes in step 2; for now its name, kind and state, so a row has somewhere to go
-struct DeviceScreen: View {
-    @EnvironmentObject private var model: FindModel
-    let key: String
-    var body: some View {
-        let all = model.devices
-        ScrollView {
-            if let d = all.first(where: { $0.key == key }) {
-                VStack(spacing: 8) {
-                    DeviceArt(device: d).frame(width: 96, height: 82).padding(.top, 12)
-                    Text(d.name).font(.name(30, .largeTitle)).foregroundColor(Theme.text)
-                    Text(kindName(d) + (d.version.isEmpty ? "" : " · " + d.version)).font(.subheadline).foregroundColor(Theme.dim)
-                    PillView(pill: statusOf(d, in: all, now: model.now))
-                    Text(statusOf(d, in: all, now: model.now).text).font(.footnote).foregroundColor(Theme.meta).multilineTextAlignment(.center)
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .background(Theme.ground.ignoresSafeArea())
-        .navigationBarTitleDisplayMode(.inline)
     }
 }

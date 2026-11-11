@@ -10,10 +10,10 @@ func artName(_ d: Device) -> String { ["one", "view", "relay", "lite", "mini", "
 func isLight(_ d: Device) -> Bool { !["one", "view", "relay"].contains(d.kind) }
 func canBlink(_ d: Device) -> Bool { d.kind != "one" && d.kind != "view" }
 
-// The iPhone's sections, in the brief's order: Ones, lights, Relays, then the rest. An unknown kind is a light
-let groups: [(title: String, kinds: [String])] = [("Ones", ["one"]), ("Lights", ["cue", "tally", "lite", "mini", "360"]),
-                                                  ("Relays", ["relay"]), ("Views", ["view"])]
-func groupOf(_ d: Device) -> Int { groups.firstIndex { $0.kinds.contains(d.kind) } ?? 1 }
+// The sections in the Mac page's order, so the two apps agree: Ones, Views, Relays, Lights. An unknown kind is a light
+let groups: [(title: String, kinds: [String])] = [("Ones", ["one"]), ("Views", ["view"]), ("Relays", ["relay"]),
+                                                  ("Lights", ["cue", "tally", "lite", "mini", "360"])]
+func groupOf(_ d: Device) -> Int { groups.firstIndex { $0.kinds.contains(d.kind) } ?? groups.count - 1 }
 
 enum Tone { case ok, warn, off }
 struct Pill { let tone: Tone; let short: String; let text: String }
@@ -104,4 +104,38 @@ func countLine(_ all: [Device]) -> String {
     return [all.count == 1 ? "1 device" : "\(all.count) devices",
             look == 0 ? "" : look == 1 ? "1 needs a look" : "\(look) need a look",
             gone == 0 ? "" : "\(gone) not seen"].filter { !$0.isEmpty }.joined(separator: " · ")
+}
+
+// A device's pages, as the page's appsOf: the first is its Settings. A One's plain / follows that browser's last
+// choice (Touch or Show mode), so Settings asks for Full setup, which opens on its Dashboard
+struct Way: Hashable { let name: String; let url: URL }
+func waysOf(_ d: Device) -> [Way] {
+    let base = "http://" + d.host, page = base + ":\(d.port)"
+    func w(_ n: String, _ u: String) -> Way? { URL(string: u).map { Way(name: n, url: $0) } }
+    if d.kind != "one" { return [w("Settings", page + "/")].compactMap { $0 } }
+    var a = [w("Settings", page + "/?browser=1")]
+    if d.hasShow { a.append(w("Show mode", page + "/show")) }
+    a.append(w("Touch", page + "/touch"))
+    if d.hasApps { a.append(w("Apps", page + "/?browser=1&tab=apps")) }
+    if d.companion { a.append(w("Companion", base + ":8000/")) }
+    if d.ontime { a.append(w("OnTime", base + ":4001/editor/")) }
+    return a.compactMap { $0 }
+}
+
+func companionWord(_ c: String) -> String {
+    c.hasPrefix("live") ? (c.contains("locked") ? "Live, locked" : "Live") : c.contains("no Companion host") ? "No Companion set"
+        : c.contains("its Cue") ? "Waiting for its Cue" : c.contains("network") ? "Waiting for a network" : c.isEmpty ? "" : "Finding Companion"
+}
+func signalWord(_ rssi: Int) -> String { rssi >= -60 ? "good signal" : rssi >= -72 ? "fair signal" : "weak signal" }
+func addressOf(_ d: Device) -> String { d.host.isEmpty ? "" : d.host + (d.port != 0 && d.port != 80 ? ":\(d.port)" : "") }
+
+// A light's brightness and its Hex's, where its /status has them (0.186.38): a percent, 1-100, locked by a Cue PIN
+struct BrightPart: Identifiable { let part: String; let label: String; let pct: Int; let locked: Bool; var id: String { part } }
+func brightOf(_ d: Device) -> [BrightPart] {
+    guard !d.gone else { return [] }
+    let h = d.health, locked = (h["tokenSet"] as? NSNumber)?.boolValue ?? h["tokenSet"] as? Bool ?? false
+    var out: [BrightPart] = []
+    if let v = (h["brightpct"] as? NSNumber)?.intValue { out.append(BrightPart(part: "light", label: "Brightness", pct: v, locked: locked)) }
+    if let v = (h["hexBright"] as? NSNumber)?.intValue { out.append(BrightPart(part: "hex", label: "Hex", pct: v, locked: locked)) }
+    return out
 }
