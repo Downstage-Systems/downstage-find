@@ -18,6 +18,7 @@
           /* the iPhone app sets these to the safe area; the Mac leaves them at 0 (step 2 sets --tb-l for the traffic lights) */
           --sa-t: 0px; --sa-r: 0px; --sa-b: 0px; --sa-l: 0px; --win-l: 0px; --tb-l: 0px; }
   * { box-sizing: border-box; }
+  body.macfs { --tb-l: 0px; }
   html, body { height: 100%; margin: 0; }
   body { display: flex; flex-direction: column; background: var(--ground); color: var(--text); font: 13px/1.4 var(--sys);
          -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none; cursor: default; overflow: hidden; }
@@ -59,13 +60,16 @@
   #body { flex: 1; min-height: 0; display: flex; }
   main { flex: 1; min-width: 0; overflow: auto; padding-bottom: calc(14px + var(--sa-b)); }
   .gh { display: flex; align-items: center; justify-content: space-between; padding: 14px calc(18px + var(--sa-r)) 6px calc(18px + var(--sa-l)); color: var(--dim); font-size: 12px; font-weight: 600; }
-  .dv { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 54px;
+  .dv { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 54px;
         padding: 6px calc(18px + var(--sa-r)) 6px calc(18px + var(--sa-l)); border-top: 1px solid var(--rule); }
   .dv:last-child { border-bottom: 1px solid var(--rule); }
   .dv.sel { background: var(--raised); }
   .dv.gone .pic, .dv.gone .nm { opacity: .5; }
   .pic { width: 40px; height: 34px; display: grid; place-items: center; }
-  .pic img { max-width: 40px; max-height: 34px; object-fit: contain; }
+  .pic img { max-width: 40px; max-height: 34px; object-fit: contain;
+             filter: brightness(1.7) drop-shadow(0 0 .6px rgba(207, 214, 220, .75)) drop-shadow(0 0 .6px rgba(207, 214, 220, .45)); }
+  .dv .pic { width: 44px; height: 38px; }
+  .dv .pic img { max-width: 44px; max-height: 38px; }
   .nm { min-width: 0; }
   .nm b { display: block; font: 700 16px/1.15 var(--disp); letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nm span { display: block; font-size: 12px; color: var(--meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -131,7 +135,7 @@
     header { flex-wrap: wrap; }
     .search { order: 9; width: 100%; }
     #detailBtn { display: none; }
-    .dv { grid-template-columns: 40px minmax(0, 1fr) auto; }
+    .dv { grid-template-columns: 44px minmax(0, 1fr) auto; }
     .dv .acts { display: none; }
     aside { position: fixed; inset: 0; z-index: 10; width: auto; border: 0; background: var(--ground);
             padding: var(--sa-t) var(--sa-r) var(--sa-b) var(--sa-l); }
@@ -324,6 +328,7 @@
     $('detail').innerHTML = sel ? detail(sel) : '';
     $('detailBtn').classList.toggle('on', !!sel && !detailHidden);
     $('detailBtn').disabled = !sel;
+    tellState({ selected: !!sel, detail: !!sel && !detailHidden, scanning });
     // Nothing is answering at all: on a Mac that is most often Local Network turned off for Find, which blocks every
     // connection while Bonjour still lists the devices (Rob's bench, 2026-11-05)
     if (list.length && list.every(d => d.gone) && Date.now() - started > 8000 && !$('say').textContent) {
@@ -429,11 +434,26 @@
     sheet('Scan this network?', 'This knocks on every address on your network. It takes a few seconds, but some venue networks treat it as an attack, so ask first if it isn’t your network.',
       'Scan', null, () => native('scan'));
   }
-  // for the Mac app's menus (step 2)
-  window.findAdd = addByAddress;
-  window.findScan = scanNetwork;
-  window.findLookAgain = lookAgain;
+  // the Mac app's menus run the page's own commands
   window.findToggleDetail = () => { detailHidden = !detailHidden; draw(); };
+  window.findCmd = cmd => {
+    if (document.querySelector('.scrim')) return;
+    ({ add: addByAddress, scan: scanNetwork, look: lookAgain, detail: window.findToggleDetail,
+       search: () => { $('q').focus(); $('q').select(); } }[cmd] || (() => {}))();
+  };
+  let told = '';
+  function tellState(st) {
+    const k = JSON.stringify(st);
+    if (k !== told && window.downstageMac) { told = k; native('state', st); }
+  }
+  // In the Mac app the toolbar is the title bar: the app drags the window from its empty space, so it needs to know
+  // where the toolbar's controls are
+  function tellDragZone() {
+    if (!window.downstageMac) return;
+    const h = document.querySelector('header');
+    const rects = [...h.querySelectorAll('button, .search')].filter(e => e.offsetParent).map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; });
+    native('dragzone', { height: h.getBoundingClientRect().bottom, rects });
+  }
 
   $('refresh').onclick = lookAgain;
   $('plus').onclick = e => {
@@ -512,7 +532,7 @@
   const letGo = () => { if (sliding) setTimeout(() => { if (sliding) { sliding = false; draw(); } }, 0); };
   addEventListener('pointerup', letGo);
   addEventListener('pointercancel', letGo);
-  addEventListener('resize', draw);
+  addEventListener('resize', () => { draw(); tellDragZone(); });
 
   // pull the list down to refresh, on touch screens: from the top of the list, past 64 px, then let go
   (() => {
@@ -544,6 +564,8 @@
     main.addEventListener('touchcancel', () => { dy = 0; end(); });
   })();
   setTimeout(draw, 5100);
+  tellDragZone();
+  if (document.fonts) document.fonts.ready.then(tellDragZone);
   setTimeout(draw, 8100);
   draw();
 </script>
