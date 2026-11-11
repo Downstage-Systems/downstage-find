@@ -354,7 +354,7 @@
     $('detailBtn').disabled = !sel;
     tellState({ selected: !!sel, detail: !!sel && !detailHidden, scanning });
     // Nothing is answering at all: on a Mac that is most often Local Network turned off for Find, which blocks every
-    // connection while Bonjour still lists the devices (Rob's bench, 2026-11-05)
+    // connection while Bonjour still lists the devices (seen on a bench, 2026-11-05)
     if (list.some(d => d.heard) && !list.some(d => d.answered) && Date.now() - started > 8000 && !$('say').textContent) {
       window.findSay('Nothing is answering. ' + (window.downstageMobile ? 'In Settings, open Downstage Find and check Local Network is on.'
         : 'In System Settings, open Privacy & Security, then Local Network, and check Downstage Find is on.'), true);

@@ -338,9 +338,9 @@ final class Finder: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
         }.resume()
     }
     // Only when asked: every address on each network this machine is on, and on each network a device in the list is
-    // on. A venue often puts its gear on its own subnet with Bonjour carried across by the router: Rob's bench has this
-    // Mac and iPhone on 192.168.1.x and the One and Relay on 192.168.10.x (2026-11-11), so a scan of this machine's own
-    // /24 alone found nothing while both were listed
+    // on. A venue often puts its gear on its own subnet with Bonjour carried across by the router: the computer and
+    // phone on one /24, the devices on another. A scan of this machine's own /24 alone then finds nothing while the
+    // devices are listed (seen 2026-11-11)
     func scan() {
         let own = localNets()
         let theirs = devices.values.compactMap { d -> String? in
